@@ -103,9 +103,14 @@ impl App {
             }
         }
 
-        // Toggle section visibility when Shift+number pressed (or the shifted symbol)
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            if let Some(d) = map_key_to_digit(&key) {
+        // Toggle section visibility when Shift+number pressed. Terminals differ:
+        // some report the shifted symbol (e.g. '!' for Shift+1) with no modifier,
+        // others set the SHIFT modifier and report '1'. Accept both cases.
+        if let Some(d) = map_key_to_digit(&key) {
+            let is_shifted_symbol = matches!(key.code,
+                KeyCode::Char('!') | KeyCode::Char('@') | KeyCode::Char('#') | KeyCode::Char('$')
+            );
+            if key.modifiers.contains(KeyModifiers::SHIFT) || is_shifted_symbol {
                 match d {
                     1 => self.show_files = !self.show_files,
                     2 => self.show_player = !self.show_player,
