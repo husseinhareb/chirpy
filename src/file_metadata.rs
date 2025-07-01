@@ -1,14 +1,15 @@
 // src/file_metadata.rs
+
 use std::{fmt, path::Path};
 use anyhow::Result;
 
-// infer for magic sniffing
+// infer for magic‐number detection
 use infer::{Infer, MatcherType};
 
-// mime_guess for extension fallback
+// extension‐based fallback
 use mime_guess::MimeGuess;
 
-/// High‐level file categories
+/// High-level file categories
 #[derive(Debug)]
 pub enum FileCategory {
     Image,
@@ -40,7 +41,7 @@ pub struct FileType {
 
 /// Detect MIME type & category for a given file path
 pub fn detect_file_type(path: &Path) -> Result<FileType> {
-    // 1. Try magic‐number detection
+    // 1. Try magic-number sniffing
     if let Some(kind) = Infer::new().get_from_path(path)? {
         let mime = kind.mime_type().to_string();
         let category = match kind.matcher_type() {
@@ -52,13 +53,13 @@ pub fn detect_file_type(path: &Path) -> Result<FileType> {
         return Ok(FileType { mime, category });
     }
 
-    // 2. Fallback to extension‐based lookup
+    // 2. Fallback to extension-based lookup
     let guess = MimeGuess::from_path(path);
     let mime = guess
-        .first_or_octet_stream()   // default to application/octet-stream
+        .first_or_octet_stream()  // defaults to application/octet-stream
         .to_string();
 
-    // 3. Map top‐level type to category
+    // 3. Map top-level type to category
     let category = match mime.split('/').next().unwrap_or("application") {
         "image"       => FileCategory::Image,
         "audio"       => FileCategory::Audio,

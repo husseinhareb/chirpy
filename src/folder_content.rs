@@ -1,5 +1,12 @@
-/// src/folder_content.rs
-use std::{env, fs, io, time::{Duration, Instant}};
+// src/folder_content.rs
+
+use std::{
+    env,
+    fs,
+    io,
+    path::{PathBuf},
+    time::{Duration, Instant},
+};
 use anyhow::Result;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode},
@@ -15,27 +22,33 @@ use ratatui::{
 };
 use crate::file_metadata::detect_file_type;
 
-/// Run the TUI file browser
-pub fn run() -> Result<()> {
-    // Load entries + types
-    let cwd = env::current_dir()?;
-    let mut entries: Vec<(String, String)> = fs::read_dir(&cwd)?
+/// Load directory entries for `dir`, returning a Vec of (name, category, mime)
+fn load_entries(dir: &PathBuf) -> Vec<(String, String, String)> {
+    let mut list = fs::read_dir(dir)
+        .unwrap() // in real code, handle errors
         .filter_map(|e| e.ok())
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let path = e.path();
-            let kind = if fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
-                "Folder".to_string()
+            if path.is_dir() {
+                (name, "Folder".to_string(), String::new())
             } else {
                 match detect_file_type(&path) {
-                    Ok(ft) => ft.category.to_string(),
-                    Err(_) => "Unknown".into(),
+                    Ok(ft) => (name, ft.category.to_string(), ft.mime),
+                    Err(_) => (name, "Unknown".to_string(), String::new()),
                 }
-            };
-            (name, kind)
+            }
         })
-        .collect();
-    entries.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        .collect::<Vec<_>>();
+    list.sort_by_key(|(n, _, _)| n.to_lowercase());
+    list
+}
+
+/// Run the TUI file browser with left/right navigation
+pub fn run() -> Result<()> {
+    // 1. Track current directory and entries
+    let mut current_dir = env::current_dir()?;
+    let mut entries = load_entries(&current_dir);
 
     // Terminal setup
     enable_raw_mode()?;
@@ -47,12 +60,18 @@ pub fn run() -> Result<()> {
     // State
     let mut state = ListState::default();
     let mut selected = 0;
-    let tick = Duration::from_millis(200);
-    let mut last = Instant::now();
+    let tick_rate = Duration::from_millis(200);
+    let mut last_tick = Instant::now();
 
     // Main loop
     loop {
+        // ensure selection is within bounds
+        if selected >= entries.len() {
+            selected = entries.len().saturating_sub(1);
+        }
         state.select(Some(selected));
+
+        // Draw UI
         terminal.draw(|f| {
             let area = f.area();
             let chunks = Layout::default()
@@ -60,17 +79,22 @@ pub fn run() -> Result<()> {
                 .constraints([Constraint::Length(3), Constraint::Min(1)].as_ref())
                 .split(area);
 
-            // Header
+            // Header block: show current path
             let header = Block::default()
-                .title(format!("Directory: {}", cwd.display()))
+                .title(format!("Directory: {}", current_dir.display()))
                 .borders(Borders::ALL);
             f.render_widget(header, chunks[0]);
 
-            // Build list
-            let items: Vec<ListItem> = entries.iter()
-                .map(|(name, kind)| {
-                    // Name padded to 40 chars
-                    let line = format!("{:<40} {}", name, kind);
+            // List items: name | category | mime
+            let items: Vec<ListItem> = entries
+                .iter()
+                .map(|(name, cat, mime)| {
+                    let line = format!(
+                        "{:<30} {:<10} {}",
+                        name,
+                        cat,
+                        if mime.is_empty() { "-" } else { mime }
+                    );
                     ListItem::new(line)
                 })
                 .collect();
@@ -83,24 +107,48 @@ pub fn run() -> Result<()> {
             f.render_stateful_widget(list, chunks[1], &mut state);
         })?;
 
-        // Input
-        let timeout = tick.checked_sub(last.elapsed()).unwrap_or_default();
+        // Input handling
+        let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
                 match key.code {
+                    // Quit
                     KeyCode::Char('q') => break,
+
+                    // Move down/up
                     KeyCode::Down if selected + 1 < entries.len() => selected += 1,
                     KeyCode::Up if selected > 0 => selected -= 1,
+
+                    // Enter folder
+                    KeyCode::Right => {
+                        let (ref name, ref kind, _) = entries[selected];
+                        if kind == "Folder" {
+                            current_dir.push(name);
+                            entries = load_entries(&current_dir);
+                            selected = 0;
+                        }
+                    }
+
+                    // Go to parent
+                    KeyCode::Left => {
+                        if current_dir.pop() {
+                            entries = load_entries(&current_dir);
+                            selected = 0;
+                        }
+                    }
+
                     _ => {}
                 }
             }
         }
-        if last.elapsed() >= tick {
-            last = Instant::now();
+
+        // Tick update (if you had dynamic content)
+        if last_tick.elapsed() >= tick_rate {
+            last_tick = Instant::now();
         }
     }
 
-    // Restore
+    // Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
