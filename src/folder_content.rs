@@ -4,7 +4,7 @@ use std::{
     env,
     fs,
     io,
-    path::{PathBuf},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 use anyhow::Result;
@@ -20,58 +20,63 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState},
     Terminal,
 };
-use crate::file_metadata::detect_file_type;
+use crate::file_metadata::{detect_file_type, FileCategory};
+use crate::icons::icon_for_entry;
 
-/// Load directory entries for `dir`, returning a Vec of (name, category, mime)
-fn load_entries(dir: &PathBuf) -> Vec<(String, String, String)> {
+/// Load the entries of `dir`, returning a Vec of
+/// (name, is_dir, category, mime)
+fn load_entries(dir: &PathBuf) -> Vec<(String, bool, FileCategory, String)> {
     let mut list = fs::read_dir(dir)
-        .unwrap() // in real code, handle errors
-        .filter_map(|e| e.ok())
+        .unwrap() // handle errors appropriately in real code
+        .filter_map(Result::ok)
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let path = e.path();
             if path.is_dir() {
-                (name, "Folder".to_string(), String::new())
+                // For directories we mark is_dir = true; category is unused
+                (name, true, FileCategory::Binary, String::new())
             } else {
+                // For files, detect type
                 match detect_file_type(&path) {
-                    Ok(ft) => (name, ft.category.to_string(), ft.mime),
-                    Err(_) => (name, "Unknown".to_string(), String::new()),
+                    Ok(ft) => (name, false, ft.category, ft.mime),
+                    Err(_) => (name, false, FileCategory::Binary, String::new()),
                 }
             }
         })
         .collect::<Vec<_>>();
-    list.sort_by_key(|(n, _, _)| n.to_lowercase());
+    // Sort alphabetically, case-insensitive
+    list.sort_by_key(|(n, _, _, _)| n.to_lowercase());
     list
 }
 
-/// Run the TUI file browser with left/right navigation
+/// Run the TUI file browser with Left/Right navigation and icons
 pub fn run() -> Result<()> {
-    // 1. Track current directory and entries
+    // 1. Track current directory and its entries
     let mut current_dir = env::current_dir()?;
     let mut entries = load_entries(&current_dir);
 
-    // Terminal setup
+    // 2. Terminal initialization
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // State
-    let mut state = ListState::default();
+    // 3. App state
+    let mut list_state = ListState::default();
     let mut selected = 0;
     let tick_rate = Duration::from_millis(200);
     let mut last_tick = Instant::now();
 
-    // Main loop
+    // 4. Main event loop
     loop {
-        // ensure selection is within bounds
+        // Clamp selection to valid range
         if selected >= entries.len() {
             selected = entries.len().saturating_sub(1);
         }
-        state.select(Some(selected));
+        list_state.select(Some(selected));
 
-        // Draw UI
+        // Draw the UI
         terminal.draw(|f| {
             let area = f.area();
             let chunks = Layout::default()
@@ -79,20 +84,30 @@ pub fn run() -> Result<()> {
                 .constraints([Constraint::Length(3), Constraint::Min(1)].as_ref())
                 .split(area);
 
-            // Header block: show current path
+            // Header: show current directory path
             let header = Block::default()
                 .title(format!("Directory: {}", current_dir.display()))
                 .borders(Borders::ALL);
             f.render_widget(header, chunks[0]);
 
-            // List items: name | category | mime
+            // Prepare list items: icon + name + category + mime
             let items: Vec<ListItem> = entries
                 .iter()
-                .map(|(name, cat, mime)| {
+                .map(|(name, is_dir, category, mime)| {
+                    // Human-readable category string
+                    let cat_str = if *is_dir {
+                        "Folder".to_string()
+                    } else {
+                        category.to_string()
+                    };
+                    // Pick the right icon
+                    let icon = icon_for_entry(*is_dir, category);
+                    // Format: ICON NAME (30) CATEGORY (10) MIME
                     let line = format!(
-                        "{:<30} {:<10} {}",
+                        "{} {:<30} {:<10} {}",
+                        icon,
                         name,
-                        cat,
+                        cat_str,
                         if mime.is_empty() { "-" } else { mime }
                     );
                     ListItem::new(line)
@@ -104,32 +119,34 @@ pub fn run() -> Result<()> {
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol(">> ");
 
-            f.render_stateful_widget(list, chunks[1], &mut state);
+            f.render_stateful_widget(list, chunks[1], &mut list_state);
         })?;
 
-        // Input handling
-        let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
+        // Handle input
+        let timeout = tick_rate
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or_default();
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
                 match key.code {
-                    // Quit
+                    // Quit on 'q'
                     KeyCode::Char('q') => break,
 
-                    // Move down/up
+                    // Move selection down/up
                     KeyCode::Down if selected + 1 < entries.len() => selected += 1,
                     KeyCode::Up if selected > 0 => selected -= 1,
 
-                    // Enter folder
+                    // Enter directory on Right arrow
                     KeyCode::Right => {
-                        let (ref name, ref kind, _) = entries[selected];
-                        if kind == "Folder" {
+                        let (ref name, is_dir, _, _) = entries[selected];
+                        if is_dir {
                             current_dir.push(name);
                             entries = load_entries(&current_dir);
                             selected = 0;
                         }
                     }
 
-                    // Go to parent
+                    // Go up one directory on Left arrow
                     KeyCode::Left => {
                         if current_dir.pop() {
                             entries = load_entries(&current_dir);
@@ -142,13 +159,13 @@ pub fn run() -> Result<()> {
             }
         }
 
-        // Tick update (if you had dynamic content)
+        // Tick for any future dynamic updates
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
         }
     }
 
-    // Restore terminal
+    // 5. Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
