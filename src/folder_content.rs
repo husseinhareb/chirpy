@@ -33,10 +33,8 @@ fn load_entries(dir: &PathBuf) -> Vec<(String, bool, FileCategory, String)> {
             let name = e.file_name().to_string_lossy().into_owned();
             let path = e.path();
             if path.is_dir() {
-                // For directories we mark is_dir = true; category is unused
                 (name, true, FileCategory::Binary, String::new())
             } else {
-                // For files, detect type
                 match detect_file_type(&path) {
                     Ok(ft) => (name, false, ft.category, ft.mime),
                     Err(_) => (name, false, FileCategory::Binary, String::new()),
@@ -44,12 +42,12 @@ fn load_entries(dir: &PathBuf) -> Vec<(String, bool, FileCategory, String)> {
             }
         })
         .collect::<Vec<_>>();
-    // Sort alphabetically, case-insensitive
     list.sort_by_key(|(n, _, _, _)| n.to_lowercase());
     list
 }
 
-/// Run the TUI file browser with Left/Right navigation and icons
+/// Run the TUI file browser with Left/Right navigation and icons,
+/// and reserve 15% of the width for the file list pane.
 pub fn run() -> Result<()> {
     // 1. Track current directory and its entries
     let mut current_dir = env::current_dir()?;
@@ -70,7 +68,7 @@ pub fn run() -> Result<()> {
 
     // 4. Main event loop
     loop {
-        // Clamp selection to valid range
+        // Clamp selection
         if selected >= entries.len() {
             selected = entries.len().saturating_sub(1);
         }
@@ -79,37 +77,31 @@ pub fn run() -> Result<()> {
         // Draw the UI
         terminal.draw(|f| {
             let area = f.area();
-            let chunks = Layout::default()
+
+            // Horizontal split: 15% for list pane, 85% for detail pane
+            let h_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(15), Constraint::Percentage(85)].as_ref())
+                .split(area);
+
+            // Inside left pane, vertical split: header + list
+            let left_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(3), Constraint::Min(1)].as_ref())
-                .split(area);
+                .split(h_chunks[0]);
 
             // Header: show current directory path
             let header = Block::default()
                 .title(format!("Directory: {}", current_dir.display()))
                 .borders(Borders::ALL);
-            f.render_widget(header, chunks[0]);
+            f.render_widget(header, left_chunks[0]);
 
-            // Prepare list items: icon + name + category + mime
+            // Prepare list items: icon + name only
             let items: Vec<ListItem> = entries
                 .iter()
-                .map(|(name, is_dir, category, mime)| {
-                    // Human-readable category string
-                    let cat_str = if *is_dir {
-                        "Folder".to_string()
-                    } else {
-                        category.to_string()
-                    };
-                    // Pick the right icon
+                .map(|(name, is_dir, category, _)| {
                     let icon = icon_for_entry(*is_dir, category);
-                    // Format: ICON NAME (30) CATEGORY (10) MIME
-                    let line = format!(
-                        "{} {:<30} {:<10} {}",
-                        icon,
-                        name,
-                        cat_str,
-                        if mime.is_empty() { "-" } else { mime }
-                    );
+                    let line = format!("{} {}", icon, name);
                     ListItem::new(line)
                 })
                 .collect();
@@ -119,7 +111,9 @@ pub fn run() -> Result<()> {
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol(">> ");
 
-            f.render_stateful_widget(list, chunks[1], &mut list_state);
+            f.render_stateful_widget(list, left_chunks[1], &mut list_state);
+
+            // The right pane (h_chunks[1]) is left empty for future details...
         })?;
 
         // Handle input
@@ -129,37 +123,29 @@ pub fn run() -> Result<()> {
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
                 match key.code {
-                    // Quit on 'q'
                     KeyCode::Char('q') => break,
-
-                    // Move selection down/up
                     KeyCode::Down if selected + 1 < entries.len() => selected += 1,
                     KeyCode::Up if selected > 0 => selected -= 1,
-
-                    // Enter directory on Right arrow
                     KeyCode::Right => {
-                        let (ref name, is_dir, _, _) = entries[selected];
-                        if is_dir {
+                        let (name, is_dir, _, _) = &entries[selected];
+                        if *is_dir {
                             current_dir.push(name);
                             entries = load_entries(&current_dir);
                             selected = 0;
                         }
                     }
-
-                    // Go up one directory on Left arrow
                     KeyCode::Left => {
                         if current_dir.pop() {
                             entries = load_entries(&current_dir);
                             selected = 0;
                         }
                     }
-
                     _ => {}
                 }
             }
         }
 
-        // Tick for any future dynamic updates
+        // Tick update
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
         }
