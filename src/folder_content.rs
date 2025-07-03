@@ -4,7 +4,7 @@ use std::{
     env,
     fs,
     io,
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
     time::{Duration, Instant},
 };
 use anyhow::Result;
@@ -22,6 +22,40 @@ use ratatui::{
 };
 use crate::file_metadata::{detect_file_type, FileCategory};
 use crate::icons::icon_for_entry;
+
+/// Returns the last `n` components of `path` joined by `/`. If the path has
+/// fewer than `n` components, returns the full path.
+fn tail_path(path: &Path, n: usize) -> String {
+    // Collect path components, keeping RootDir as "/"
+    let comps: Vec<String> = path
+        .components()
+        .filter_map(|c| match c {
+            Component::RootDir => Some(String::from("/")),
+            Component::Normal(os) => Some(os.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+
+    // Separate leading slash (if absolute) from the rest
+    let (prefix, body) = if comps.first().map(|s| s == "/").unwrap_or(false) {
+        (Some("/"), &comps[1..])
+    } else {
+        (None, &comps[..])
+    };
+
+    // Choose last `n` or full body
+    let slice = if body.len() <= n {
+        body
+    } else {
+        &body[body.len().saturating_sub(n)..]
+    };
+
+    // Reconstruct path
+    match prefix {
+        Some(p) => format!("/{}", slice.join("/")),
+        None => slice.join("/"),
+    }
+}
 
 /// Load the entries of `dir`, returning a Vec of
 /// (name, is_dir, category, mime)
@@ -81,22 +115,10 @@ pub fn run() -> Result<()> {
             // Horizontal split: 15% for list pane, 85% for detail pane
             let h_chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(15), Constraint::Percentage(85)].as_ref())
+                .constraints([Constraint::Percentage(18), Constraint::Percentage(85)].as_ref())
                 .split(area);
 
-            // Inside left pane, vertical split: header + list
-            let left_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Min(1)].as_ref())
-                .split(h_chunks[0]);
-
-            // Header: show current directory path
-            let header = Block::default()
-                .title(format!("Directory: {}", current_dir.display()))
-                .borders(Borders::ALL);
-            f.render_widget(header, left_chunks[0]);
-
-            // Prepare list items: icon + name only
+            // Prepare list items: icon + name
             let items: Vec<ListItem> = entries
                 .iter()
                 .map(|(name, is_dir, category, _)| {
@@ -106,12 +128,18 @@ pub fn run() -> Result<()> {
                 })
                 .collect();
 
+            // Build the list block, using tail_path to show up to last 3 components
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("Files"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!(" {}", tail_path(&current_dir, 3))),
+                )
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol(">> ");
 
-            f.render_stateful_widget(list, left_chunks[1], &mut list_state);
+            // Render the list to take full height of the left pane
+            f.render_stateful_widget(list, h_chunks[0], &mut list_state);
 
             // The right pane (h_chunks[1]) is left empty for future details...
         })?;
