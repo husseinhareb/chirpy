@@ -1,7 +1,7 @@
 // src/ui/tui.rs
 
 use std::{
-    io::{self, Stdout},
+    io,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -15,18 +15,20 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
 use crate::folder_content::{load_entries, tail_path};
 use crate::file_metadata::FileCategory;
 use crate::icons::icon_for_entry;
+use crate::music_player::{MusicPlayer, TrackMetadata};
 
 pub struct App {
     current_dir: PathBuf,
     entries: Vec<(String, bool, FileCategory, String)>,
     state: ListState,
     selected: usize,
+    player: MusicPlayer,
 }
 
 impl App {
@@ -39,6 +41,7 @@ impl App {
             entries: load_entries(&cwd),
             state,
             selected: 0,
+            player: MusicPlayer::new(),
         })
     }
 
@@ -54,12 +57,16 @@ impl App {
                     self.selected -= 1;
                 }
             }
-            KeyCode::Right => {
-                let (name, is_dir, _, _) = &self.entries[self.selected];
+            KeyCode::Right | KeyCode::Enter => {
+                let (name, is_dir, category, _) = &self.entries[self.selected];
+                let path = self.current_dir.join(name);
                 if *is_dir {
                     self.current_dir.push(name);
                     self.entries = load_entries(&self.current_dir);
                     self.selected = 0;
+                } else if *category == FileCategory::Audio {
+                    // play and load metadata
+                    let _ = self.player.play(&path);
                 }
             }
             KeyCode::Left => {
@@ -74,13 +81,17 @@ impl App {
     }
 
     fn draw(&mut self, f: &mut Frame<'_>) {
-        // Use .area() instead of deprecated .size()
         let area = f.area();
-        let chunks = Layout::default()
+        let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(18), Constraint::Percentage(82)].as_ref())
+            .constraints([
+                Constraint::Percentage(18),
+                Constraint::Percentage(64),
+                Constraint::Percentage(18),
+            ])
             .split(area);
 
+        // Left: folder list
         let items: Vec<ListItem> = self
             .entries
             .iter()
@@ -89,7 +100,6 @@ impl App {
                 ListItem::new(format!("{} {}", icon, name))
             })
             .collect();
-
         let list = List::new(items)
             .block(
                 Block::default()
@@ -98,25 +108,34 @@ impl App {
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol(">> ");
+        f.render_stateful_widget(list, cols[0], &mut self.state);
 
-        f.render_stateful_widget(list, chunks[0], &mut self.state);
+        // Middle: player info
+        let text = match &self.player.metadata {
+            Some(TrackMetadata { artist, title, album }) => {
+                format!("▶️ Now Playing\n\nArtist: {}\nTitle : {}\nAlbum : {}", artist, title, album)
+            }
+            None => "▶️ No track playing".to_string(),
+        };
+        let player = Paragraph::new(text)
+            .block(Block::default().borders(Borders::ALL).title("Player"));
+        f.render_widget(player, cols[1]);
+
+        // Right: (reserved)
     }
 }
 
 pub fn run() -> Result<()> {
-    // Terminal initialization
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Setup app state
     let mut app = App::new()?;
     let tick_rate = Duration::from_millis(200);
     let mut last_tick = Instant::now();
 
-    // Main event loop
     loop {
         terminal.draw(|f| app.draw(f))?;
 
@@ -135,10 +154,8 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
 }
-

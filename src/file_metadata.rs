@@ -10,7 +10,7 @@ use infer::{Infer, MatcherType};
 use mime_guess::MimeGuess;
 
 /// High-level file categories
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum FileCategory {
     Image,
     Audio,
