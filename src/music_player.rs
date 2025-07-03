@@ -7,7 +7,7 @@ use anyhow::Result;
 use lofty::probe::Probe;
 use lofty::file::{AudioFile, TaggedFileExt};
 
-// Rodio: decode & play audio
+// Rodio: decode, play, pause & resume audio
 use rodio::{Decoder, OutputStream, Sink};
 
 /// One metadata entry: raw tag key & value.
@@ -24,8 +24,8 @@ pub struct TrackMetadata {
     pub duration_secs: u64,
 }
 
-/// Simple player that can `play()` a file (stopping prior playback)
-/// and exposes all its metadata (including duration_secs) via `self.metadata`.
+/// Simple player that can `play()`, `pause()`, `resume()` or `stop()` a file
+/// (stopping any prior playback) and exposes all its metadata.
 pub struct MusicPlayer {
     // Keep the stream alive or audio will stop immediately.
     _stream:  Option<OutputStream>,
@@ -66,7 +66,7 @@ impl MusicPlayer {
         self.sink     = Some(sink);
 
         // 5) Probe & read tags + properties
-        let mut tagged_file = Probe::open(path)?.read()?;
+        let tagged_file = Probe::open(path)?.read()?;
 
         // Collect all tag key/value pairs
         let mut tags = Vec::new();
@@ -100,6 +100,20 @@ impl MusicPlayer {
         Ok(())
     }
 
+    /// Pause playback if currently playing.
+    pub fn pause(&mut self) {
+        if let Some(s) = &self.sink {
+            s.pause();
+        }
+    }
+
+    /// Resume playback if currently paused.
+    pub fn resume(&mut self) {
+        if let Some(s) = &self.sink {
+            s.play();
+        }
+    }
+
     /// Immediately halt playback (if any).
     pub fn stop(&mut self) {
         if let Some(s) = self.sink.take() {
@@ -107,8 +121,13 @@ impl MusicPlayer {
         }
     }
 
-    /// Returns true if there’s an active sink (i.e. something is playing).
+    /// Returns true if there’s an active sink (i.e. something is playing or paused).
     pub fn is_playing(&self) -> bool {
         self.sink.is_some()
+    }
+
+    /// Returns true if playback is currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.sink.as_ref().map_or(false, |s| s.is_paused())
     }
 }

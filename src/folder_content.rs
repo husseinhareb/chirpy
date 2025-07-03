@@ -1,9 +1,6 @@
 // src/folder_content.rs
 
-use std::{
-    fs,
-    path::{Component, Path, PathBuf},
-};
+use std::{fs, path::{PathBuf, Component, Path}};
 use crate::file_metadata::{detect_file_type, FileCategory};
 
 /// Returns the last `n` components of `path` joined by `/`. If the path has
@@ -12,9 +9,9 @@ pub fn tail_path(path: &Path, n: usize) -> String {
     let comps: Vec<String> = path
         .components()
         .filter_map(|c| match c {
-            Component::RootDir => Some(String::from("/")),
-            Component::Normal(os) => Some(os.to_string_lossy().into_owned()),
-            _ => None,
+            Component::RootDir      => Some("/".to_string()),
+            Component::Normal(os)   => Some(os.to_string_lossy().into_owned()),
+            _                       => None,
         })
         .collect();
 
@@ -32,29 +29,36 @@ pub fn tail_path(path: &Path, n: usize) -> String {
 
     match prefix {
         Some(_) => format!("/{}", slice.join("/")),
-        None => slice.join("/"),
+        None    => slice.join("/"),
     }
 }
 
-/// Load the entries of `dir`, returning a Vec of
+/// Load **only** directories and audio files from `dir`, returning a Vec of
 /// (name, is_dir, category, mime)
 pub fn load_entries(dir: &PathBuf) -> Vec<(String, bool, FileCategory, String)> {
     let mut list = fs::read_dir(dir)
-        .unwrap()
+        .unwrap()  // you might replace this with `?` and a Result in real code
         .filter_map(Result::ok)
-        .map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
+        .filter_map(|e| {
             let path = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+
             if path.is_dir() {
-                (name, true, FileCategory::Binary, String::new())
+                // Always include directories so we can navigate into them
+                Some((name, true, FileCategory::Binary, String::new()))
             } else {
+                // Only include if it's an audio file
                 match detect_file_type(&path) {
-                    Ok(ft) => (name, false, ft.category, ft.mime),
-                    Err(_) => (name, false, FileCategory::Binary, String::new()),
+                    Ok(ft) if ft.category == FileCategory::Audio => {
+                        Some((name, false, ft.category, ft.mime))
+                    }
+                    _ => None,  // skip non-audio files
                 }
             }
         })
         .collect::<Vec<_>>();
+
+    // Sort alphabetically
     list.sort_by_key(|(n, _, _, _)| n.to_lowercase());
     list
 }

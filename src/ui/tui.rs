@@ -61,7 +61,7 @@ impl App {
                     self.selected -= 1;
                 }
             }
-            KeyCode::Right | KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Right => {
                 let (name, is_dir, category, _) = &self.entries[self.selected];
                 let path = self.current_dir.join(name);
                 if *is_dir {
@@ -70,13 +70,19 @@ impl App {
                     self.selected = 0;
                 } else if *category == FileCategory::Audio {
                     if self.player.play(&path).is_ok() {
-                        // reset timer
                         self.elapsed = 0;
-                        // pull real duration from metadata
                         if let Some(TrackMetadata { duration_secs, .. }) = &self.player.metadata {
                             self.duration = *duration_secs.max(&1);
                         }
                     }
+                }
+            }
+            KeyCode::Char(' ') => {
+                // toggle pause/resume
+                if self.player.is_paused() {
+                    self.player.resume();
+                } else {
+                    self.player.pause();
                 }
             }
             KeyCode::Left => {
@@ -84,6 +90,11 @@ impl App {
                     self.entries = load_entries(&self.current_dir);
                     self.selected = 0;
                 }
+            }
+            KeyCode::Char('q') => {
+                // stop playback and exit
+                self.player.stop();
+                std::process::exit(0);
             }
             _ => {}
         }
@@ -101,7 +112,7 @@ impl App {
             ])
             .split(area);
 
-        // Left pane: folder list
+        // --- Left pane: folder list ---
         let items: Vec<ListItem> = self
             .entries
             .iter()
@@ -110,6 +121,7 @@ impl App {
                 ListItem::new(format!("{} {}", icon, name))
             })
             .collect();
+
         let list = List::new(items)
             .block(
                 Block::default()
@@ -118,16 +130,21 @@ impl App {
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol(">> ");
+
         f.render_stateful_widget(list, cols[0], &mut self.state);
 
-        // Middle pane: metadata + progress bar
-        let middle_chunks = Layout::default()
+        // --- Middle pane: Player block ---
+        let player_block = Block::default().borders(Borders::ALL).title("Player");
+        f.render_widget(player_block, cols[1]);
+
+        // split inside Player: metadata + progress bar
+        let inner = Layout::default()
             .direction(Direction::Vertical)
+            .margin(1)
             .constraints([Constraint::Min(1), Constraint::Length(3)])
             .split(cols[1]);
 
-        // Metadata display
-        let block = Block::default().borders(Borders::ALL).title("Player");
+        // --- Metadata display ---
         if let Some(TrackMetadata { tags, properties, duration_secs }) = &self.player.metadata {
             let mut lines = Vec::new();
             lines.push(format!("Duration: {}s", duration_secs));
@@ -137,26 +154,21 @@ impl App {
             for (k, v) in properties {
                 lines.push(format!("{}: {}", k, v));
             }
-            let text = lines.join("\n");
-            let paragraph = Paragraph::new(text)
-                .block(block.clone())
+            let paragraph = Paragraph::new(lines.join("\n"))
                 .wrap(Wrap { trim: true });
-            f.render_widget(paragraph, middle_chunks[0]);
+            f.render_widget(paragraph, inner[0]);
         } else {
             let paragraph = Paragraph::new("▶️ No track playing")
-                .block(block.clone())
                 .wrap(Wrap { trim: true });
-            f.render_widget(paragraph, middle_chunks[0]);
+            f.render_widget(paragraph, inner[0]);
         }
 
-        // Progress bar with numeric label "elapsed/total"
+        // --- Progress bar ---
         let ratio = (self.elapsed as f64 / self.duration as f64).clamp(0.0, 1.0);
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Progress"))
             .gauge_style(Style::default().add_modifier(Modifier::ITALIC))
-            .ratio(ratio)
-            .label(format!("{}s / {}s", self.elapsed, self.duration));
-        f.render_widget(gauge, middle_chunks[1]);
+            .ratio(ratio);
+        f.render_widget(gauge, inner[1]);
     }
 }
 
@@ -168,7 +180,7 @@ pub fn run() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new()?;
-    let tick_rate = Duration::from_secs(1); // tick once per second
+    let tick_rate = Duration::from_secs(1); // update every second
     let mut last_tick = Instant::now();
 
     loop {
@@ -179,23 +191,15 @@ pub fn run() -> Result<()> {
             .unwrap_or_default();
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') {
-                    break;
-                }
                 app.on_key(key.code);
             }
         }
 
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
-            if app.player.is_playing() {
+            if app.player.is_playing() && !app.player.is_paused() {
                 app.elapsed = (app.elapsed + 1).min(app.duration);
             }
         }
     }
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
 }
