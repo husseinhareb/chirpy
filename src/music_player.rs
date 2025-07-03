@@ -3,50 +3,55 @@
 use std::{fs::File, io::BufReader, path::PathBuf};
 use anyhow::Result;
 
-// Lofty: file probing + tag reading
+// Lofty: probing + tag reading
 use lofty::probe::Probe;
-use lofty::file::TaggedFileExt;
-use lofty::prelude::ItemKey;
+use lofty::file::{AudioFile, TaggedFileExt};
 
-// Rodio: audio decoding & playback
+// Rodio: decode & play audio
 use rodio::{Decoder, OutputStream, Sink};
 
-/// Simple holder for the title/artist/album of a track.
+/// One metadata entry: raw tag key & value.
+pub type TagEntry = (String, String);
+
+/// Collected metadata for the current track, including its real duration.
 #[derive(Debug, Clone)]
 pub struct TrackMetadata {
-    pub title:  String,
-    pub artist: String,
-    pub album:  String,
+    /// All tag‐frame key/value pairs from the primary tag.
+    pub tags: Vec<TagEntry>,
+    /// Audio properties (bitrate, sample rate, channels, etc.)
+    pub properties: Vec<(String, String)>,
+    /// Total track length in seconds.
+    pub duration_secs: u64,
 }
 
-/// A tiny music‐player: can `play()` a file (stopping any prior playback)
-/// and expose its metadata via `self.metadata`.
+/// Simple player that can `play()` a file (stopping prior playback)
+/// and exposes all its metadata (including duration_secs) via `self.metadata`.
 pub struct MusicPlayer {
-    // Must keep the stream alive or audio will immediately stop.
-    _stream: Option<OutputStream>,
+    // Keep the stream alive or audio will stop immediately.
+    _stream:  Option<OutputStream>,
     sink:      Option<Sink>,
-    /// Most‐recently loaded metadata (if any)
+    /// Most‐recently loaded metadata (if any).
     pub metadata: Option<TrackMetadata>,
 }
 
 impl MusicPlayer {
-    /// Construct an idle player (no stream, no metadata).
+    /// Create an idle player.
     pub fn new() -> Self {
         Self {
-            _stream: None,
-            sink: None,
+            _stream:  None,
+            sink:      None,
             metadata: None,
         }
     }
 
-    /// Stop any existing playback, start playing `path`, and load its tags.
+    /// Stop any existing playback, start playing `path`, and load its metadata.
     pub fn play(&mut self, path: &PathBuf) -> Result<()> {
-        // 1) Stop previous sink (if any)
+        // 1) Stop previous
         if let Some(old) = self.sink.take() {
             old.stop();
         }
 
-        // 2) Open a new audio stream + sink
+        // 2) Open audio output & sink
         let (stream, handle) = OutputStream::try_default()?;
         let sink = Sink::try_new(&handle)?;
 
@@ -56,20 +61,42 @@ impl MusicPlayer {
         sink.append(source);
         sink.play();
 
-        // 4) Store them so playback actually continues
+        // 4) Retain stream & sink so playback continues
         self._stream = Some(stream);
         self.sink     = Some(sink);
 
-        // 5) Probe & read tags (no write)
-        let tagged = Probe::open(path)?.read()?;
-        self.metadata = tagged.primary_tag().map(|tag| {
-            TrackMetadata {
-                title:  tag.get_string(&ItemKey::TrackTitle).unwrap_or_default().to_string(),
-                artist: tag.get_string(&ItemKey::TrackArtist).unwrap_or_default().to_string(),
-                album:  tag.get_string(&ItemKey::AlbumTitle).unwrap_or_default().to_string(),
-            }
-        });
+        // 5) Probe & read tags + properties
+        let mut tagged_file = Probe::open(path)?.read()?;
 
+        // Collect all tag key/value pairs
+        let mut tags = Vec::new();
+        if let Some(tag) = tagged_file.primary_tag() {
+            for item in tag.items() {
+                tags.push((format!("{:?}", item.key()), format!("{:?}", item.value())));
+            }
+        }
+
+        // Collect core audio properties
+        let props = tagged_file.properties();
+        let mut properties = Vec::new();
+        if let Some(b) = props.audio_bitrate() {
+            properties.push(("Bitrate (kbps)".into(), b.to_string()));
+        }
+        if let Some(sr) = props.sample_rate() {
+            properties.push(("Sample Rate (Hz)".into(), sr.to_string()));
+        }
+        if let Some(ch) = props.channels() {
+            properties.push(("Channels".into(), ch.to_string()));
+        }
+
+        // Extract real duration in seconds
+        let duration_secs = props.duration().as_secs();
+
+        self.metadata = Some(TrackMetadata {
+            tags,
+            properties,
+            duration_secs,
+        });
         Ok(())
     }
 
@@ -78,5 +105,10 @@ impl MusicPlayer {
         if let Some(s) = self.sink.take() {
             s.stop();
         }
+    }
+
+    /// Returns true if there’s an active sink (i.e. something is playing).
+    pub fn is_playing(&self) -> bool {
+        self.sink.is_some()
     }
 }

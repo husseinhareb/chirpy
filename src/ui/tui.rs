@@ -15,7 +15,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 use crate::folder_content::{load_entries, tail_path};
@@ -29,6 +29,8 @@ pub struct App {
     state: ListState,
     selected: usize,
     player: MusicPlayer,
+    elapsed: u64,   // elapsed seconds
+    duration: u64,  // total duration in seconds
 }
 
 impl App {
@@ -42,6 +44,8 @@ impl App {
             state,
             selected: 0,
             player: MusicPlayer::new(),
+            elapsed: 0,
+            duration: 1, // avoid division by zero
         })
     }
 
@@ -65,8 +69,14 @@ impl App {
                     self.entries = load_entries(&self.current_dir);
                     self.selected = 0;
                 } else if *category == FileCategory::Audio {
-                    // play and load metadata
-                    let _ = self.player.play(&path);
+                    if self.player.play(&path).is_ok() {
+                        // reset timer
+                        self.elapsed = 0;
+                        // pull real duration from metadata
+                        if let Some(TrackMetadata { duration_secs, .. }) = &self.player.metadata {
+                            self.duration = *duration_secs.max(&1);
+                        }
+                    }
                 }
             }
             KeyCode::Left => {
@@ -91,7 +101,7 @@ impl App {
             ])
             .split(area);
 
-        // Left: folder list
+        // Left pane: folder list
         let items: Vec<ListItem> = self
             .entries
             .iter()
@@ -110,18 +120,43 @@ impl App {
             .highlight_symbol(">> ");
         f.render_stateful_widget(list, cols[0], &mut self.state);
 
-        // Middle: player info
-        let text = match &self.player.metadata {
-            Some(TrackMetadata { artist, title, album }) => {
-                format!("▶️ Now Playing\n\nArtist: {}\nTitle : {}\nAlbum : {}", artist, title, album)
-            }
-            None => "▶️ No track playing".to_string(),
-        };
-        let player = Paragraph::new(text)
-            .block(Block::default().borders(Borders::ALL).title("Player"));
-        f.render_widget(player, cols[1]);
+        // Middle pane: metadata + progress bar
+        let middle_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .split(cols[1]);
 
-        // Right: (reserved)
+        // Metadata display
+        let block = Block::default().borders(Borders::ALL).title("Player");
+        if let Some(TrackMetadata { tags, properties, duration_secs }) = &self.player.metadata {
+            let mut lines = Vec::new();
+            lines.push(format!("Duration: {}s", duration_secs));
+            for (k, v) in tags {
+                lines.push(format!("{}: {}", k, v));
+            }
+            for (k, v) in properties {
+                lines.push(format!("{}: {}", k, v));
+            }
+            let text = lines.join("\n");
+            let paragraph = Paragraph::new(text)
+                .block(block.clone())
+                .wrap(Wrap { trim: true });
+            f.render_widget(paragraph, middle_chunks[0]);
+        } else {
+            let paragraph = Paragraph::new("▶️ No track playing")
+                .block(block.clone())
+                .wrap(Wrap { trim: true });
+            f.render_widget(paragraph, middle_chunks[0]);
+        }
+
+        // Progress bar with numeric label "elapsed/total"
+        let ratio = (self.elapsed as f64 / self.duration as f64).clamp(0.0, 1.0);
+        let gauge = Gauge::default()
+            .block(Block::default().borders(Borders::ALL).title("Progress"))
+            .gauge_style(Style::default().add_modifier(Modifier::ITALIC))
+            .ratio(ratio)
+            .label(format!("{}s / {}s", self.elapsed, self.duration));
+        f.render_widget(gauge, middle_chunks[1]);
     }
 }
 
@@ -133,13 +168,15 @@ pub fn run() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new()?;
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = Duration::from_secs(1); // tick once per second
     let mut last_tick = Instant::now();
 
     loop {
         terminal.draw(|f| app.draw(f))?;
 
-        let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
+        let timeout = tick_rate
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or_default();
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('q') {
@@ -151,6 +188,9 @@ pub fn run() -> Result<()> {
 
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
+            if app.player.is_playing() {
+                app.elapsed = (app.elapsed + 1).min(app.duration);
+            }
         }
     }
 
