@@ -1,10 +1,9 @@
-/// src/main.rs
-use anyhow::Result;
-
-mod icons;
+//src/main.rs
 mod file_metadata;
-mod folder_content;
+mod icons;
+mod folder_content;        
+mod ui;          
 
-fn main() -> Result<()> {
-    folder_content::run()
+fn main() -> anyhow::Result<()> {
+    ui::tui::run()
 }
