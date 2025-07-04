@@ -9,7 +9,7 @@ use anyhow::Result;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{ enable_raw_mode, EnterAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -145,7 +145,7 @@ impl App {
             .split(cols[1]);
 
         // --- Metadata display ---
-        if let Some(TrackMetadata { tags, properties, duration_secs }) = &self.player.metadata {
+        if let Some(TrackMetadata { tags, properties, duration_secs, lyrics }) = &self.player.metadata {
             let mut lines = Vec::new();
             lines.push(format!("Duration: {}s", duration_secs));
             for (k, v) in tags {

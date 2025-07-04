@@ -3,17 +3,17 @@
 use std::{fs::File, io::BufReader, path::PathBuf};
 use anyhow::Result;
 
-// Lofty: probing + tag reading
+// Lofty: probing + tag reading (including comments for lyrics)
 use lofty::probe::Probe;
 use lofty::file::{AudioFile, TaggedFileExt};
-
+use lofty::tag::{ItemKey};
 // Rodio: decode, play, pause & resume audio
 use rodio::{Decoder, OutputStream, Sink};
 
 /// One metadata entry: raw tag key & value.
 pub type TagEntry = (String, String);
 
-/// Collected metadata for the current track, including its real duration.
+/// Collected metadata for the current track, including its real duration and any embedded lyrics.
 #[derive(Debug, Clone)]
 pub struct TrackMetadata {
     /// All tag‐frame key/value pairs from the primary tag.
@@ -22,15 +22,15 @@ pub struct TrackMetadata {
     pub properties: Vec<(String, String)>,
     /// Total track length in seconds.
     pub duration_secs: u64,
+    /// Unsynchronized lyrics, if stored in a comment frame (description = "lyrics").
+    pub lyrics: Option<String>,
 }
 
 /// Simple player that can `play()`, `pause()`, `resume()` or `stop()` a file
 /// (stopping any prior playback) and exposes all its metadata.
 pub struct MusicPlayer {
-    // Keep the stream alive or audio will stop immediately.
-    _stream:  Option<OutputStream>,
-    sink:      Option<Sink>,
-    /// Most‐recently loaded metadata (if any).
+    _stream: Option<OutputStream>,
+    sink:     Option<Sink>,
     pub metadata: Option<TrackMetadata>,
 }
 
@@ -39,14 +39,14 @@ impl MusicPlayer {
     pub fn new() -> Self {
         Self {
             _stream:  None,
-            sink:      None,
+            sink:     None,
             metadata: None,
         }
     }
 
-    /// Stop any existing playback, start playing `path`, and load its metadata.
+    /// Stop any existing playback, start playing `path`, and load its metadata + lyrics.
     pub fn play(&mut self, path: &PathBuf) -> Result<()> {
-        // 1) Stop previous
+        // 1) Stop previous sink
         if let Some(old) = self.sink.take() {
             old.stop();
         }
@@ -65,18 +65,31 @@ impl MusicPlayer {
         self._stream = Some(stream);
         self.sink     = Some(sink);
 
-        // 5) Probe & read tags + properties
+        // 5) Probe the file with Lofty
         let tagged_file = Probe::open(path)?.read()?;
 
-        // Collect all tag key/value pairs
+        // 5a) Extract lyrics from the first comment frame with description "lyrics"
+        let lyrics = tagged_file
+            .primary_tag()
+            .and_then(|tag| {
+                tag.get_items(&ItemKey::Comment)
+                    .find(|item| item.description().eq_ignore_ascii_case("lyrics"))
+                    .cloned()
+                    .and_then(|item| item.into_value().into_string())
+            });
+
+        // 5b) Collect all other tag key/value pairs
         let mut tags = Vec::new();
         if let Some(tag) = tagged_file.primary_tag() {
             for item in tag.items() {
-                tags.push((format!("{:?}", item.key()), format!("{:?}", item.value())));
+                tags.push((
+                    format!("{:?}", item.key()),
+                    format!("{:?}", item.value()),
+                ));
             }
         }
 
-        // Collect core audio properties
+        // 5c) Collect core audio properties
         let props = tagged_file.properties();
         let mut properties = Vec::new();
         if let Some(b) = props.audio_bitrate() {
@@ -89,14 +102,17 @@ impl MusicPlayer {
             properties.push(("Channels".into(), ch.to_string()));
         }
 
-        // Extract real duration in seconds
+        // 5d) Extract real duration in seconds
         let duration_secs = props.duration().as_secs();
 
+        // 6) Store metadata
         self.metadata = Some(TrackMetadata {
             tags,
             properties,
             duration_secs,
+            lyrics,
         });
+
         Ok(())
     }
 
