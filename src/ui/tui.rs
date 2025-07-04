@@ -1,25 +1,25 @@
-use std::{
-    io,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{ io, path::PathBuf, time::{ Duration, Instant } };
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event as CEvent, KeyCode},
+    event::{ self, Event as CEvent, KeyCode },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{ disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen },
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
-    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap},
-    Frame, Terminal,
+    layout::{ Constraint, Direction, Layout },
+    style::{ Modifier, Style },
+    widgets::{ Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap },
+    Frame,
+    Terminal,
 };
-use crate::folder_content::{load_entries, tail_path};
+// Image widget for Kitty/iTerm protocols
+use ratatui_image::Image;
+
+use crate::folder_content::{ load_entries, tail_path };
 use crate::file_metadata::FileCategory;
 use crate::icons::icon_for_entry;
-use crate::music_player::{MusicPlayer, TrackMetadata};
+use crate::music_player::{ MusicPlayer, TrackMetadata };
 
 pub struct App {
     current_dir: PathBuf,
@@ -27,8 +27,8 @@ pub struct App {
     state: ListState,
     selected: usize,
     player: MusicPlayer,
-    elapsed: u64,   // elapsed seconds
-    duration: u64,  // total duration in seconds
+    elapsed: u64, // elapsed seconds
+    duration: u64, // total duration in seconds
 }
 
 impl App {
@@ -103,18 +103,18 @@ impl App {
 
     fn draw(&mut self, f: &mut Frame<'_>) {
         let area = f.area();
+        // Three columns: folder list, player, artwork
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Percentage(18),
-                Constraint::Percentage(64),
-                Constraint::Percentage(18),
+                Constraint::Percentage(54),
+                Constraint::Percentage(28),
             ])
             .split(area);
 
         // --- Left pane: folder list ---
-        let items: Vec<ListItem> = self
-            .entries
+        let items: Vec<ListItem> = self.entries
             .iter()
             .map(|(name, is_dir, category, _)| {
                 let icon = icon_for_entry(*is_dir, category);
@@ -126,26 +126,23 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" {}", tail_path(&self.current_dir, 3))),
+                    .title(format!(" {}", tail_path(&self.current_dir, 3)))
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol(">> ");
 
         f.render_stateful_widget(list, cols[0], &mut self.state);
 
-        // --- Middle pane: Player block ---
+        // --- Middle pane: Player + metadata + progress ---
         let player_block = Block::default().borders(Borders::ALL).title("Player");
         f.render_widget(player_block, cols[1]);
-
-        // split inside Player: metadata + progress bar
         let inner = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([Constraint::Min(1), Constraint::Length(3)])
             .split(cols[1]);
 
-        // --- Metadata display ---
-        if let Some(TrackMetadata { tags, properties, duration_secs, lyrics: _ }) = &self.player.metadata {
+        if let Some(TrackMetadata { tags, properties, duration_secs, .. }) = &self.player.metadata {
             let mut lines = Vec::new();
             lines.push(format!("Duration: {}s", duration_secs));
             for (k, v) in tags {
@@ -154,21 +151,29 @@ impl App {
             for (k, v) in properties {
                 lines.push(format!("{}: {}", k, v));
             }
-            let paragraph = Paragraph::new(lines.join("\n"))
-                .wrap(Wrap { trim: true });
+            let paragraph = Paragraph::new(lines.join("\n")).wrap(Wrap { trim: true });
             f.render_widget(paragraph, inner[0]);
         } else {
-            let paragraph = Paragraph::new("▶️ No track playing")
-                .wrap(Wrap { trim: true });
+            let paragraph = Paragraph::new("▶️ No track playing").wrap(Wrap { trim: true });
             f.render_widget(paragraph, inner[0]);
         }
 
-        // --- Progress bar ---
-        let ratio = (self.elapsed as f64 / self.duration as f64).clamp(0.0, 1.0);
+        let ratio = ((self.elapsed as f64) / (self.duration as f64)).clamp(0.0, 1.0);
         let gauge = Gauge::default()
             .gauge_style(Style::default().add_modifier(Modifier::ITALIC))
             .ratio(ratio);
         f.render_widget(gauge, inner[1]);
+
+        // --- Right pane: Artwork ---
+        if let Some(TrackMetadata { artwork: Some(bytes), .. }) = &self.player.metadata {
+            let img = Image::new(bytes.clone());
+            f.render_widget(img, cols[2]);
+        } else {
+            let placeholder = Paragraph::new("No Artwork").block(
+                Block::default().borders(Borders::ALL).title("Artwork")
+            );
+            f.render_widget(placeholder, cols[2]);
+        }
     }
 }
 
@@ -192,9 +197,7 @@ pub fn run() -> Result<()> {
     loop {
         terminal.draw(|f| app.draw(f))?;
 
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_default();
+        let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
 
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {

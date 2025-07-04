@@ -1,10 +1,10 @@
 // src/file_metadata.rs
 
-use std::{fmt, path::Path};
+use std::{ fmt, path::Path };
 use anyhow::Result;
 
 // infer for magic‐number detection
-use infer::{Infer, MatcherType};
+use infer::{ Infer, MatcherType };
 
 // extension‐based fallback
 use mime_guess::MimeGuess;
@@ -22,11 +22,11 @@ pub enum FileCategory {
 impl fmt::Display for FileCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            FileCategory::Image    => "Image",
-            FileCategory::Audio    => "Audio",
-            FileCategory::Video    => "Video",
+            FileCategory::Image => "Image",
+            FileCategory::Audio => "Audio",
+            FileCategory::Video => "Video",
             FileCategory::Document => "Document",
-            FileCategory::Binary   => "Binary",
+            FileCategory::Binary => "Binary",
         };
         write!(f, "{}", s)
     }
@@ -48,7 +48,7 @@ pub fn detect_file_type(path: &Path) -> Result<FileType> {
             MatcherType::Image => FileCategory::Image,
             MatcherType::Audio => FileCategory::Audio,
             MatcherType::Video => FileCategory::Video,
-            _                  => FileCategory::Binary,
+            _ => FileCategory::Binary,
         };
         return Ok(FileType { mime, category });
     }
@@ -56,17 +56,17 @@ pub fn detect_file_type(path: &Path) -> Result<FileType> {
     // 2. Fallback to extension-based lookup
     let guess = MimeGuess::from_path(path);
     let mime = guess
-        .first_or_octet_stream()  // defaults to application/octet-stream
+        .first_or_octet_stream() // defaults to application/octet-stream
         .to_string();
 
     // 3. Map top-level type to category
     let category = match mime.split('/').next().unwrap_or("application") {
-        "image"       => FileCategory::Image,
-        "audio"       => FileCategory::Audio,
-        "video"       => FileCategory::Video,
-        "text"        => FileCategory::Document,
+        "image" => FileCategory::Image,
+        "audio" => FileCategory::Audio,
+        "video" => FileCategory::Video,
+        "text" => FileCategory::Document,
         "application" => FileCategory::Document,
-        _             => FileCategory::Binary,
+        _ => FileCategory::Binary,
     };
 
     Ok(FileType { mime, category })
