@@ -14,8 +14,7 @@ use rodio::{Decoder, OutputStream, Sink};
 /// One metadata entry: raw tag key & value.
 pub type TagEntry = (String, String);
 
-/// Collected metadata for the current track,
-/// including its real duration and any embedded lyrics and artwork.
+/// Collected metadata for the current track, including its real duration, lyrics, and artwork.
 #[derive(Debug, Clone)]
 pub struct TrackMetadata {
     /// All tag‑frame key/value pairs from the primary tag.
@@ -24,19 +23,19 @@ pub struct TrackMetadata {
     pub properties: Vec<(String, String)>,
     /// Total track length in seconds.
     pub duration_secs: u64,
-    /// Unsynchronized lyrics, if stored in a comment frame (description = "lyrics").
+    /// Unsynchronized lyrics (from a comment frame "lyrics").
     pub lyrics: Option<String>,
     /// Raw image bytes (PNG/JPEG) for artwork, if available.
     pub artwork: Option<Vec<u8>>,
 }
 
-/// Simple player that can `play()`, `pause()`, `resume()` or `stop()` a file
-/// (stopping any prior playback) and exposes all its metadata.
+/// Simple player that can `play()`, `pause()`, `resume()`, or `stop()` a file,
+/// stopping any prior playback, and exposes its metadata.
 pub struct MusicPlayer {
     // Keep the stream alive or audio will stop immediately.
     _stream: Option<OutputStream>,
     sink: Option<Sink>,
-    /// Most‑recently loaded metadata (if any).
+    /// Most‑recent metadata (if any).
     pub metadata: Option<TrackMetadata>,
 }
 
@@ -46,7 +45,7 @@ impl MusicPlayer {
         Self { _stream: None, sink: None, metadata: None }
     }
 
-    /// Stop any existing playback, start playing `path`, and load its metadata + lyrics + artwork.
+    /// Stop any existing playback, load metadata, and start playing `path`.
     pub fn play(&mut self, path: &PathBuf) -> Result<()> {
         // 1) Stop previous sink
         if let Some(old) = self.sink.take() {
@@ -83,7 +82,7 @@ impl MusicPlayer {
         // 5b) Extract artwork from the first embedded picture
         let artwork = tagged_file
             .primary_tag()
-            .and_then(|tag| tag.pictures().first().map(|pic| pic.data.clone()));
+            .and_then(|tag| tag.pictures().first().map(|pic| pic.data().to_vec()));
 
         // 5c) Collect all other tag key/value pairs
         let mut tags = Vec::new();
@@ -140,7 +139,7 @@ impl MusicPlayer {
         }
     }
 
-    /// Returns true if there’s an active sink (i.e. something is playing or paused).
+    /// Returns true if there’s an active sink (i.e. playing or paused).
     pub fn is_playing(&self) -> bool {
         self.sink.is_some()
     }

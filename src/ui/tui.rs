@@ -1,34 +1,57 @@
-use std::{ io, path::PathBuf, time::{ Duration, Instant } };
+// src/ui/tui.rs
+
+// In Cargo.toml:
+// ratatui-image = "8.0"
+// image = "0.24"
+
+use std::{
+    io,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+
 use anyhow::Result;
 use crossterm::{
-    event::{ self, Event as CEvent, KeyCode },
+    event::{self, Event as CEvent, KeyCode},
     execute,
-    terminal::{ disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen },
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use image::DynamicImage;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{ Constraint, Direction, Layout },
-    style::{ Modifier, Style },
-    widgets::{ Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap },
-    Frame,
-    Terminal,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap},
+    Frame, Terminal,
 };
-// Image widget for Kitty/iTerm protocols
-use ratatui_image::Image;
 
-use crate::folder_content::{ load_entries, tail_path };
-use crate::file_metadata::FileCategory;
-use crate::icons::icon_for_entry;
-use crate::music_player::{ MusicPlayer, TrackMetadata };
+use ratatui_image::{
+    Image,                                    // Stateless widget
+    picker::{Picker, ProtocolType},
+    protocol::Protocol,
+    Resize,
+};
+
+use crate::{
+    file_metadata::FileCategory,
+    folder_content::{load_entries, tail_path},
+    icons::icon_for_entry,
+    music_player::{MusicPlayer, TrackMetadata},
+};
 
 pub struct App {
     current_dir: PathBuf,
     entries: Vec<(String, bool, FileCategory, String)>,
     state: ListState,
     selected: usize,
+
     player: MusicPlayer,
-    elapsed: u64, // elapsed seconds
-    duration: u64, // total duration in seconds
+    elapsed: u64,
+    duration: u64,
+
+    picker: Picker,
+    // store the raw artwork image, not a fixed Protocol
+    artwork: Option<DynamicImage>,
 }
 
 impl App {
@@ -36,14 +59,23 @@ impl App {
         let cwd = std::env::current_dir()?;
         let mut state = ListState::default();
         state.select(Some(0));
+
+        // Probe terminal for graphics protocols & font-size
+        let mut picker = Picker::from_query_stdio()?;
+        picker.set_protocol_type(ProtocolType::Kitty);
+
         Ok(Self {
             current_dir: cwd.clone(),
             entries: load_entries(&cwd),
             state,
             selected: 0,
+
             player: MusicPlayer::new(),
             elapsed: 0,
-            duration: 1, // avoid division by zero
+            duration: 1,
+
+            picker,
+            artwork: None,
         })
     }
 
@@ -62,21 +94,34 @@ impl App {
             KeyCode::Enter | KeyCode::Right => {
                 let (name, is_dir, category, _) = &self.entries[self.selected];
                 let path = self.current_dir.join(name);
+
                 if *is_dir {
+                    // cd into directory
                     self.current_dir.push(name);
                     self.entries = load_entries(&self.current_dir);
                     self.selected = 0;
                 } else if *category == FileCategory::Audio {
+                    // play audio + grab metadata
                     if self.player.play(&path).is_ok() {
                         self.elapsed = 0;
-                        if let Some(TrackMetadata { duration_secs, .. }) = &self.player.metadata {
-                            self.duration = *duration_secs.max(&1);
-                        }
+                        self.duration = self
+                            .player
+                            .metadata
+                            .as_ref()
+                            .map(|m| m.duration_secs.max(1))
+                            .unwrap_or(1);
+
+                        // pull out the DynamicImage for later
+                        self.artwork = self
+                            .player
+                            .metadata
+                            .as_ref()
+                            .and_then(|m| m.artwork.as_ref())
+                            .and_then(|bytes| image::load_from_memory(bytes).ok());
                     }
                 }
             }
             KeyCode::Char(' ') => {
-                // toggle pause/resume
                 if self.player.is_paused() {
                     self.player.resume();
                 } else {
@@ -90,7 +135,6 @@ impl App {
                 }
             }
             KeyCode::Char('q') => {
-                // stop playback, restore terminal, and exit
                 self.player.stop();
                 execute!(io::stdout(), LeaveAlternateScreen).ok();
                 disable_raw_mode().ok();
@@ -103,7 +147,6 @@ impl App {
 
     fn draw(&mut self, f: &mut Frame<'_>) {
         let area = f.area();
-        // Three columns: folder list, player, artwork
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -113,90 +156,103 @@ impl App {
             ])
             .split(area);
 
-        // --- Left pane: folder list ---
-        let items: Vec<ListItem> = self.entries
+        // ── Left pane: file list
+        let items: Vec<ListItem> = self
+            .entries
             .iter()
             .map(|(name, is_dir, category, _)| {
-                let icon = icon_for_entry(*is_dir, category);
-                ListItem::new(format!("{} {}", icon, name))
+                ListItem::new(format!("{} {}", icon_for_entry(*is_dir, category), name))
             })
             .collect();
-
         let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" {}", tail_path(&self.current_dir, 3)))
-            )
+            .block(Block::default().borders(Borders::ALL).title(format!(
+                " {}",
+                tail_path(&self.current_dir, 3)
+            )))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol(">> ");
-
         f.render_stateful_widget(list, cols[0], &mut self.state);
 
-        // --- Middle pane: Player + metadata + progress ---
-        let player_block = Block::default().borders(Borders::ALL).title("Player");
-        f.render_widget(player_block, cols[1]);
+        // ── Middle pane: metadata + progress
+        f.render_widget(Block::default().borders(Borders::ALL).title("Player"), cols[1]);
         let inner = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([Constraint::Min(1), Constraint::Length(3)])
             .split(cols[1]);
 
-        if let Some(TrackMetadata { tags, properties, duration_secs, .. }) = &self.player.metadata {
-            let mut lines = Vec::new();
-            lines.push(format!("Duration: {}s", duration_secs));
+        if let Some(TrackMetadata {
+            tags,
+            properties,
+            duration_secs,
+            ..
+        }) = &self.player.metadata
+        {
+            let mut lines = vec![format!("Duration: {}s", duration_secs)];
             for (k, v) in tags {
                 lines.push(format!("{}: {}", k, v));
             }
             for (k, v) in properties {
                 lines.push(format!("{}: {}", k, v));
             }
-            let paragraph = Paragraph::new(lines.join("\n")).wrap(Wrap { trim: true });
-            f.render_widget(paragraph, inner[0]);
+            f.render_widget(
+                Paragraph::new(lines.join("\n")).wrap(Wrap { trim: true }),
+                inner[0],
+            );
         } else {
-            let paragraph = Paragraph::new("▶️ No track playing").wrap(Wrap { trim: true });
-            f.render_widget(paragraph, inner[0]);
+            f.render_widget(
+                Paragraph::new("▶️ No track playing").wrap(Wrap { trim: true }),
+                inner[0],
+            );
         }
 
-        let ratio = ((self.elapsed as f64) / (self.duration as f64)).clamp(0.0, 1.0);
-        let gauge = Gauge::default()
-            .gauge_style(Style::default().add_modifier(Modifier::ITALIC))
-            .ratio(ratio);
-        f.render_widget(gauge, inner[1]);
+        let ratio = (self.elapsed as f64 / self.duration as f64).clamp(0.0, 1.0);
+        f.render_widget(
+            Gauge::default()
+                .gauge_style(Style::default().add_modifier(Modifier::ITALIC))
+                .ratio(ratio),
+            inner[1],
+        );
 
-        // --- Right pane: Artwork ---
-        if let Some(TrackMetadata { artwork: Some(bytes), .. }) = &self.player.metadata {
-            let img = Image::new(bytes.clone());
-            f.render_widget(img, cols[2]);
+        // ── Right pane: responsive artwork
+        let art_area = cols[2];
+        f.render_widget(Block::default().borders(Borders::ALL).title("Artwork"), art_area);
+
+        if let Some(dyn_img) = &self.artwork {
+            // compute a square that fills the full width of art_area
+            let cell_w = art_area.width;
+            let square_h = cell_w.min(art_area.height);
+            // center vertically
+            let offset_y = art_area.y + ((art_area.height - square_h) / 2);
+            let draw_area = Rect::new(art_area.x, offset_y, cell_w, square_h);
+
+            // protocol size uses 0,0 origin but same width/height in cells
+            let proto_size = Rect::new(0, 0, cell_w, square_h);
+            if let Ok(proto) = self.picker.new_protocol(dyn_img.clone(), proto_size, Resize::Fit(None)) {
+                let img_widget = Image::new(&proto);
+                f.render_widget(img_widget, draw_area);
+            }
         } else {
-            let placeholder = Paragraph::new("No Artwork").block(
-                Block::default().borders(Borders::ALL).title("Artwork")
-            );
-            f.render_widget(placeholder, cols[2]);
+            // no artwork: already rendered the block above
         }
     }
 }
 
 pub fn run() -> Result<()> {
-    // enter raw mode and alternate screen
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
 
-    // create terminal and clear existing content
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    // initialize app
     let mut app = App::new()?;
     let tick_rate = Duration::from_secs(1);
     let mut last_tick = Instant::now();
 
-    // main loop
     loop {
         terminal.draw(|f| app.draw(f))?;
-
         let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
 
         if event::poll(timeout)? {
