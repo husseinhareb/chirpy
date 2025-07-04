@@ -1,5 +1,3 @@
-// src/ui/tui.rs
-
 use std::{
     io,
     path::PathBuf,
@@ -9,7 +7,7 @@ use anyhow::Result;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode},
     execute,
-    terminal::{ enable_raw_mode, EnterAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -92,8 +90,10 @@ impl App {
                 }
             }
             KeyCode::Char('q') => {
-                // stop playback and exit
+                // stop playback, restore terminal, and exit
                 self.player.stop();
+                execute!(io::stdout(), LeaveAlternateScreen).ok();
+                disable_raw_mode().ok();
                 std::process::exit(0);
             }
             _ => {}
@@ -145,7 +145,7 @@ impl App {
             .split(cols[1]);
 
         // --- Metadata display ---
-        if let Some(TrackMetadata { tags, properties, duration_secs, lyrics }) = &self.player.metadata {
+        if let Some(TrackMetadata { tags, properties, duration_secs, lyrics: _ }) = &self.player.metadata {
             let mut lines = Vec::new();
             lines.push(format!("Duration: {}s", duration_secs));
             for (k, v) in tags {
@@ -173,22 +173,29 @@ impl App {
 }
 
 pub fn run() -> Result<()> {
+    // enter raw mode and alternate screen
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+
+    // create terminal and clear existing content
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
+    // initialize app
     let mut app = App::new()?;
-    let tick_rate = Duration::from_secs(1); // update every second
+    let tick_rate = Duration::from_secs(1);
     let mut last_tick = Instant::now();
 
+    // main loop
     loop {
         terminal.draw(|f| app.draw(f))?;
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or_default();
+
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
                 app.on_key(key.code);
