@@ -1,9 +1,3 @@
-// src/ui/tui.rs
-
-// In Cargo.toml:
-// ratatui-image = "8.0"
-// image = "0.24"
-
 use std::{
     io,
     path::PathBuf,
@@ -26,9 +20,8 @@ use ratatui::{
 };
 
 use ratatui_image::{
-    Image,                                    // Stateless widget
+    Image,
     picker::{Picker, ProtocolType},
-    protocol::Protocol,
     Resize,
 };
 
@@ -50,7 +43,6 @@ pub struct App {
     duration: u64,
 
     picker: Picker,
-    // store the raw artwork image, not a fixed Protocol
     artwork: Option<DynamicImage>,
 }
 
@@ -60,7 +52,6 @@ impl App {
         let mut state = ListState::default();
         state.select(Some(0));
 
-        // Probe terminal for graphics protocols & font-size
         let mut picker = Picker::from_query_stdio()?;
         picker.set_protocol_type(ProtocolType::Kitty);
 
@@ -96,12 +87,10 @@ impl App {
                 let path = self.current_dir.join(name);
 
                 if *is_dir {
-                    // cd into directory
                     self.current_dir.push(name);
                     self.entries = load_entries(&self.current_dir);
                     self.selected = 0;
                 } else if *category == FileCategory::Audio {
-                    // play audio + grab metadata
                     if self.player.play(&path).is_ok() {
                         self.elapsed = 0;
                         self.duration = self
@@ -111,7 +100,6 @@ impl App {
                             .map(|m| m.duration_secs.max(1))
                             .unwrap_or(1);
 
-                        // pull out the DynamicImage for later
                         self.artwork = self
                             .player
                             .metadata
@@ -156,7 +144,7 @@ impl App {
             ])
             .split(area);
 
-        // ── Left pane: file list
+        // Left pane: file list
         let items: Vec<ListItem> = self
             .entries
             .iter()
@@ -173,7 +161,7 @@ impl App {
             .highlight_symbol(">> ");
         f.render_stateful_widget(list, cols[0], &mut self.state);
 
-        // ── Middle pane: metadata + progress
+        // Middle pane: metadata + progress
         f.render_widget(Block::default().borders(Borders::ALL).title("Player"), cols[1]);
         let inner = Layout::default()
             .direction(Direction::Vertical)
@@ -181,20 +169,10 @@ impl App {
             .constraints([Constraint::Min(1), Constraint::Length(3)])
             .split(cols[1]);
 
-        if let Some(TrackMetadata {
-            tags,
-            properties,
-            duration_secs,
-            ..
-        }) = &self.player.metadata
-        {
+        if let Some(TrackMetadata { tags, properties, duration_secs, .. }) = &self.player.metadata {
             let mut lines = vec![format!("Duration: {}s", duration_secs)];
-            for (k, v) in tags {
-                lines.push(format!("{}: {}", k, v));
-            }
-            for (k, v) in properties {
-                lines.push(format!("{}: {}", k, v));
-            }
+            for (k, v) in tags { lines.push(format!("{}: {}", k, v)); }
+            for (k, v) in properties { lines.push(format!("{}: {}", k, v)); }
             f.render_widget(
                 Paragraph::new(lines.join("\n")).wrap(Wrap { trim: true }),
                 inner[0],
@@ -208,32 +186,31 @@ impl App {
 
         let ratio = (self.elapsed as f64 / self.duration as f64).clamp(0.0, 1.0);
         f.render_widget(
-            Gauge::default()
-                .gauge_style(Style::default().add_modifier(Modifier::ITALIC))
-                .ratio(ratio),
+            Gauge::default().gauge_style(Style::default().add_modifier(Modifier::ITALIC)).ratio(ratio),
             inner[1],
         );
 
-        // ── Right pane: responsive artwork
+        // Right pane: responsive artwork with margin
         let art_area = cols[2];
         f.render_widget(Block::default().borders(Borders::ALL).title("Artwork"), art_area);
 
         if let Some(dyn_img) = &self.artwork {
-            // compute a square that fills the full width of art_area
-            let cell_w = art_area.width;
-            let square_h = cell_w.min(art_area.height);
-            // center vertically
-            let offset_y = art_area.y + ((art_area.height - square_h) / 2);
-            let draw_area = Rect::new(art_area.x, offset_y, cell_w, square_h);
+            // inner dimensions (leave 1-cell margin inside border)
+            let inner_w = art_area.width.saturating_sub(2);
+            let inner_h = art_area.height.saturating_sub(2);
+            // square size no larger than inner_w and inner_h
+            let size = inner_w.min(inner_h);
+            // center in inner rect
+            let offset_x = art_area.x + 1 + ((inner_w - size) / 2);
+            let offset_y = art_area.y + 1 + ((inner_h - size) / 2);
+            let draw_area = Rect::new(offset_x, offset_y, size, size);
 
-            // protocol size uses 0,0 origin but same width/height in cells
-            let proto_size = Rect::new(0, 0, cell_w, square_h);
+            // protocol size matches draw_area cell dimensions
+            let proto_size = Rect::new(0, 0, size, size);
             if let Ok(proto) = self.picker.new_protocol(dyn_img.clone(), proto_size, Resize::Fit(None)) {
                 let img_widget = Image::new(&proto);
                 f.render_widget(img_widget, draw_area);
             }
-        } else {
-            // no artwork: already rendered the block above
         }
     }
 }
