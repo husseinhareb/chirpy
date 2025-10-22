@@ -65,11 +65,16 @@ impl MusicPlayer {
         // 4) Retain stream & sink so playback continues
         self._stream = Some(stream);
         self.sink = Some(sink);
+        Ok(())
+    }
 
-        // 5) Probe the file with Lofty
-        let tagged_file = Probe::open(path)?.read()?;
+    /// Load metadata for `path` without touching player state. This is safe to call
+    /// from a background thread and returns a plain `TrackMetadata` struct.
+    pub fn load_metadata(path: PathBuf) -> Result<TrackMetadata> {
+        // Probe the file with Lofty
+        let tagged_file = Probe::open(&path)?.read()?;
 
-        // 5a) Extract lyrics from the first comment frame with description "lyrics"
+        // Extract lyrics from the first comment frame with description "lyrics"
         let lyrics = tagged_file
             .primary_tag()
             .and_then(|tag| {
@@ -79,12 +84,12 @@ impl MusicPlayer {
                     .and_then(|item| item.into_value().into_string())
             });
 
-        // 5b) Extract artwork from the first embedded picture
+        // Extract artwork from the first embedded picture
         let artwork = tagged_file
             .primary_tag()
             .and_then(|tag| tag.pictures().first().map(|pic| pic.data().to_vec()));
 
-        // 5c) Collect all other tag key/value pairs
+        // Collect all other tag key/value pairs
         let mut tags = Vec::new();
         if let Some(tag) = tagged_file.primary_tag() {
             for item in tag.items() {
@@ -92,7 +97,7 @@ impl MusicPlayer {
             }
         }
 
-        // 5d) Collect core audio properties
+        // Collect core audio properties
         let props = tagged_file.properties();
         let mut properties = Vec::new();
         if let Some(b) = props.audio_bitrate() {
@@ -106,16 +111,13 @@ impl MusicPlayer {
         }
         let duration_secs = props.duration().as_secs();
 
-        // 6) Store metadata
-        self.metadata = Some(TrackMetadata {
+        Ok(TrackMetadata {
             tags,
             properties,
             duration_secs,
             lyrics,
             artwork,
-        });
-
-        Ok(())
+        })
     }
 
     /// Pause playback if currently playing.

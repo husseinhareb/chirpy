@@ -1,6 +1,8 @@
 use std::{
     io,
     path::PathBuf,
+    sync::mpsc::{Receiver, Sender},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -44,6 +46,9 @@ pub struct App {
 
     picker: Picker,
     artwork: Option<DynamicImage>,
+    // metadata channel: background loader -> UI
+    meta_tx: Sender<TrackMetadata>,
+    meta_rx: Receiver<TrackMetadata>,
 }
 
 impl App {
@@ -54,6 +59,8 @@ impl App {
 
         let mut picker = Picker::from_query_stdio()?;
         picker.set_protocol_type(ProtocolType::Kitty);
+
+        let (meta_tx, meta_rx) = std::sync::mpsc::channel::<TrackMetadata>();
 
         Ok(Self {
             current_dir: cwd.clone(),
@@ -67,6 +74,8 @@ impl App {
 
             picker,
             artwork: None,
+            meta_tx,
+            meta_rx,
         })
     }
 
@@ -92,20 +101,20 @@ impl App {
                     self.selected = 0;
                 } else if *category == FileCategory::Audio {
                     if self.player.play(&path).is_ok() {
+                        // Clear any prior metadata while background loader runs
+                        self.player.metadata = None;
                         self.elapsed = 0;
-                        self.duration = self
-                            .player
-                            .metadata
-                            .as_ref()
-                            .map(|m| m.duration_secs.max(1))
-                            .unwrap_or(1);
+                        self.duration = 1;
+                        self.artwork = None;
 
-                        self.artwork = self
-                            .player
-                            .metadata
-                            .as_ref()
-                            .and_then(|m| m.artwork.as_ref())
-                            .and_then(|bytes| image::load_from_memory(bytes).ok());
+                        // Spawn a background thread to load metadata (Lofty probing)
+                        let tx = self.meta_tx.clone();
+                        let path_clone = path.clone();
+                        thread::spawn(move || {
+                            if let Ok(meta) = MusicPlayer::load_metadata(path_clone) {
+                                let _ = tx.send(meta);
+                            }
+                        });
                     }
                 }
             }
@@ -229,6 +238,24 @@ pub fn run() -> Result<()> {
     let mut last_tick = Instant::now();
 
     loop {
+        // Pull any ready metadata from background loader and apply it before drawing.
+        if let Ok(meta) = app.meta_rx.try_recv() {
+            app.player.metadata = Some(meta);
+            app.duration = app
+                .player
+                .metadata
+                .as_ref()
+                .map(|m| m.duration_secs.max(1))
+                .unwrap_or(1);
+
+            app.artwork = app
+                .player
+                .metadata
+                .as_ref()
+                .and_then(|m| m.artwork.as_ref())
+                .and_then(|bytes| image::load_from_memory(bytes).ok());
+        }
+
         terminal.draw(|f| app.draw(f))?;
         let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
 
