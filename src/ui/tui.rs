@@ -240,6 +240,10 @@ pub fn run() -> Result<()> {
     loop {
         // Pull any ready metadata from background loader and apply it before drawing.
         if let Ok(meta) = app.meta_rx.try_recv() {
+            // Only update metadata and duration here. Do NOT eagerly load artwork into
+            // `app.artwork` because creating terminal image protocols on every draw
+            // can flood the terminal and make it unresponsive. Artwork can be loaded
+            // on demand (e.g., with a dedicated key) in the future.
             app.player.metadata = Some(meta);
             app.duration = app
                 .player
@@ -247,13 +251,6 @@ pub fn run() -> Result<()> {
                 .as_ref()
                 .map(|m| m.duration_secs.max(1))
                 .unwrap_or(1);
-
-            app.artwork = app
-                .player
-                .metadata
-                .as_ref()
-                .and_then(|m| m.artwork.as_ref())
-                .and_then(|bytes| image::load_from_memory(bytes).ok());
         }
 
         terminal.draw(|f| app.draw(f))?;

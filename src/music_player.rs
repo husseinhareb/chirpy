@@ -10,7 +10,7 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::ItemKey;
 
 // Rodio: decode, play, pause & resume audio
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use rodio::{Decoder, OutputStream, Sink};
 
 enum PlayerCommand {
     Play(PathBuf),
@@ -139,9 +139,8 @@ impl MusicPlayer {
     pub fn play(&mut self, path: &PathBuf) -> Result<()> {
         // Send Play command to audio thread and return immediately.
         let p = path.clone();
-        self.cmd_tx.send(PlayerCommand::Play(p)).ok();
-        Ok(())
-        Ok(())
+    self.cmd_tx.send(PlayerCommand::Play(p)).ok();
+    Ok(())
     }
 
     /// Load metadata for `path` without touching player state. This is safe to call
