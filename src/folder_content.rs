@@ -47,6 +47,11 @@ pub fn load_entries(dir: &PathBuf) -> Vec<(String, bool, FileCategory, String)> 
             let path = e.path();
             let name = e.file_name().to_string_lossy().into_owned();
 
+            // Skip hidden files and folders (those starting with a dot)
+            if name.starts_with('.') {
+                return None;
+            }
+
             if path.is_dir() {
                 // Always include directories so we can navigate into them
                 Some((name, true, FileCategory::Binary, String::new()))

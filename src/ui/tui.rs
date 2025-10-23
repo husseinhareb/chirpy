@@ -144,6 +144,17 @@ impl App {
 
     fn draw(&mut self, f: &mut Frame<'_>) {
         let area = f.area();
+
+        // Reserve bottom 20% of the terminal for the audio visualizer and use the
+        // remaining top 80% for the existing UI (file list, player, artwork).
+        let vertical_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+            .split(area);
+
+        let main_area = vertical_chunks[0];
+        let bottom_area = vertical_chunks[1];
+
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -151,7 +162,7 @@ impl App {
                 Constraint::Percentage(54),
                 Constraint::Percentage(28),
             ])
-            .split(area);
+            .split(main_area);
 
         // Left pane: file list
         let items: Vec<ListItem> = self
@@ -221,8 +232,13 @@ impl App {
                 f.render_widget(img_widget, draw_area);
             }
         }
+
+        // Bottom pane: audio visualizer placeholder (20% height, full width)
+        f.render_widget(
+            Block::default().borders(Borders::ALL).title("Visualizer"),
+            bottom_area,
+        );
     }
-}
 
 pub fn run() -> Result<()> {
     enable_raw_mode()?;
