@@ -8,10 +8,10 @@ use std::{
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event as CEvent, KeyCode},
+    event::{self, Event as CEvent, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+ };
 use image::DynamicImage;
 use ratatui::{
     backend::CrosstermBackend,
@@ -49,6 +49,11 @@ pub struct App {
     // metadata channel: background loader -> UI
     meta_tx: Sender<TrackMetadata>,
     meta_rx: Receiver<TrackMetadata>,
+    // Section visibility toggles (1..4)
+    show_files: bool,
+    show_player: bool,
+    show_artwork: bool,
+    show_visualizer: bool,
 }
 
 impl App {
@@ -76,11 +81,43 @@ impl App {
             artwork: None,
             meta_tx,
             meta_rx,
+            show_files: true,
+            show_player: true,
+            show_artwork: true,
+            show_visualizer: true,
         })
     }
+    fn on_key(&mut self, key: KeyEvent) {
+        // Helper: map digit/shifted-digit to section number (1..4)
+        fn map_key_to_digit(k: &KeyEvent) -> Option<usize> {
+            if let KeyCode::Char(c) = k.code {
+                match c {
+                    '1' | '!' => Some(1),
+                    '2' | '@' => Some(2),
+                    '3' | '#' => Some(3),
+                    '4' | '$' => Some(4),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
 
-    fn on_key(&mut self, code: KeyCode) {
-        match code {
+        // Toggle section visibility when Shift+number pressed (or the shifted symbol)
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            if let Some(d) = map_key_to_digit(&key) {
+                match d {
+                    1 => self.show_files = !self.show_files,
+                    2 => self.show_player = !self.show_player,
+                    3 => self.show_artwork = !self.show_artwork,
+                    4 => self.show_visualizer = !self.show_visualizer,
+                    _ => {}
+                }
+                return;
+            }
+        }
+
+        match key.code {
             KeyCode::Down => {
                 if self.selected + 1 < self.entries.len() {
                     self.selected += 1;
@@ -145,26 +182,59 @@ impl App {
     fn draw(&mut self, f: &mut Frame<'_>) {
         let area = f.area();
 
-        // Reserve bottom 20% of the terminal for the audio visualizer and use the
-        // remaining top 80% for the existing UI (file list, player, artwork).
-        let vertical_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
-            .split(area);
+        // Reserve bottom 20% of the terminal for the audio visualizer only if
+        // the visualizer is enabled; otherwise the main UI gets 100% of the area.
+        let (main_area, bottom_area_opt) = if self.show_visualizer {
+            let vertical_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+                .split(area);
+            (vertical_chunks[0], Some(vertical_chunks[1]))
+        } else {
+            (area, None)
+        };
 
-        let main_area = vertical_chunks[0];
-        let bottom_area = vertical_chunks[1];
+        // Build column weights dynamically based on visible sections so remaining
+        // components expand to fill space (responsive behavior).
+        let mut section_order = Vec::new();
+        let mut weights = Vec::new();
+        if self.show_files {
+            section_order.push("files");
+            weights.push(18u16);
+        }
+        if self.show_player {
+            section_order.push("player");
+            weights.push(54u16);
+        }
+        if self.show_artwork {
+            section_order.push("artwork");
+            weights.push(28u16);
+        }
 
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(18),
-                Constraint::Percentage(54),
-                Constraint::Percentage(28),
-            ])
-            .split(main_area);
+        let cols: Vec<Rect> = if !weights.is_empty() {
+            let sum: u16 = weights.iter().copied().sum();
+            let constraints: Vec<Constraint> = weights
+                .into_iter()
+                .map(|w| Constraint::Percentage((w as u32 * 100 / sum as u32) as u16))
+                .collect();
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(constraints)
+                .split(main_area)
+                .iter()
+                .cloned()
+                .collect()
+        } else {
+            // If no columns visible, create a single full-width column so code below
+            // can still index safely (it will be unused).
+            vec![main_area]
+        };
 
-        // Left pane: file list
+        // Render visible columns in order; map each visible section to the next
+        // rect in `cols` so that hiding/showing sections reflows the UI.
+        let mut col_index = 0usize;
+
+        // Prepare file list widget data once
         let items: Vec<ListItem> = self
             .entries
             .iter()
@@ -172,72 +242,92 @@ impl App {
                 ListItem::new(format!("{} {}", icon_for_entry(*is_dir, category), name))
             })
             .collect();
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(format!(
-                " {}",
-                tail_path(&self.current_dir, 3)
-            )))
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            .highlight_symbol(">> ");
-        f.render_stateful_widget(list, cols[0], &mut self.state);
 
-        // Middle pane: metadata + progress
-        f.render_widget(Block::default().borders(Borders::ALL).title("Player"), cols[1]);
-        let inner = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([Constraint::Min(1), Constraint::Length(3)])
-            .split(cols[1]);
+        for section in section_order.iter() {
+            match *section {
+                "files" => {
+                    if col_index < cols.len() {
+                        let title = format!("1:  {}", tail_path(&self.current_dir, 3));
+                        let list = List::new(items.clone())
+                            .block(Block::default().borders(Borders::ALL).title(title))
+                            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+                            .highlight_symbol(">> ");
+                        f.render_stateful_widget(list, cols[col_index], &mut self.state);
+                    }
+                    col_index += 1;
+                }
+                "player" => {
+                    if col_index < cols.len() {
+                        let title = "2: Player";
+                        f.render_widget(Block::default().borders(Borders::ALL).title(title), cols[col_index]);
+                        let inner = Layout::default()
+                            .direction(Direction::Vertical)
+                            .margin(1)
+                            .constraints([Constraint::Min(1), Constraint::Length(3)])
+                            .split(cols[col_index]);
 
-        if let Some(TrackMetadata { tags, properties, duration_secs, .. }) = &self.player.metadata {
-            let mut lines = vec![format!("Duration: {}s", duration_secs)];
-            for (k, v) in tags { lines.push(format!("{}: {}", k, v)); }
-            for (k, v) in properties { lines.push(format!("{}: {}", k, v)); }
-            f.render_widget(
-                Paragraph::new(lines.join("\n")).wrap(Wrap { trim: true }),
-                inner[0],
-            );
-        } else {
-            f.render_widget(
-                Paragraph::new("▶️ No track playing").wrap(Wrap { trim: true }),
-                inner[0],
-            );
-        }
+                        if let Some(TrackMetadata { tags, properties, duration_secs, .. }) = &self.player.metadata {
+                            let mut lines = vec![format!("Duration: {}s", duration_secs)];
+                            for (k, v) in tags { lines.push(format!("{}: {}", k, v)); }
+                            for (k, v) in properties { lines.push(format!("{}: {}", k, v)); }
+                            f.render_widget(
+                                Paragraph::new(lines.join("\n")).wrap(Wrap { trim: true }),
+                                inner[0],
+                            );
+                        } else {
+                            f.render_widget(
+                                Paragraph::new("▶️ No track playing").wrap(Wrap { trim: true }),
+                                inner[0],
+                            );
+                        }
 
-        let ratio = (self.elapsed as f64 / self.duration as f64).clamp(0.0, 1.0);
-        f.render_widget(
-            Gauge::default().gauge_style(Style::default().add_modifier(Modifier::ITALIC)).ratio(ratio),
-            inner[1],
-        );
+                        let ratio = (self.elapsed as f64 / self.duration as f64).clamp(0.0, 1.0);
+                        f.render_widget(
+                            Gauge::default().gauge_style(Style::default().add_modifier(Modifier::ITALIC)).ratio(ratio),
+                            inner[1],
+                        );
+                    }
+                    col_index += 1;
+                }
+                "artwork" => {
+                    if col_index < cols.len() {
+                        let title = "3: Artwork";
+                        let art_area = cols[col_index];
+                        f.render_widget(Block::default().borders(Borders::ALL).title(title), art_area);
 
-        // Right pane: responsive artwork with margin
-        let art_area = cols[2];
-        f.render_widget(Block::default().borders(Borders::ALL).title("Artwork"), art_area);
+                        if let Some(dyn_img) = &self.artwork {
+                            // inner dimensions (leave 1-cell margin inside border)
+                            let inner_w = art_area.width.saturating_sub(2);
+                            let inner_h = art_area.height.saturating_sub(2);
+                            // square size no larger than inner_w and inner_h
+                            let size = inner_w.min(inner_h);
+                            // center in inner rect
+                            let offset_x = art_area.x + 1 + ((inner_w - size) / 2);
+                            let offset_y = art_area.y + 1 + ((inner_h - size) / 2);
+                            let draw_area = Rect::new(offset_x, offset_y, size, size);
 
-        if let Some(dyn_img) = &self.artwork {
-            // inner dimensions (leave 1-cell margin inside border)
-            let inner_w = art_area.width.saturating_sub(2);
-            let inner_h = art_area.height.saturating_sub(2);
-            // square size no larger than inner_w and inner_h
-            let size = inner_w.min(inner_h);
-            // center in inner rect
-            let offset_x = art_area.x + 1 + ((inner_w - size) / 2);
-            let offset_y = art_area.y + 1 + ((inner_h - size) / 2);
-            let draw_area = Rect::new(offset_x, offset_y, size, size);
-
-            // protocol size matches draw_area cell dimensions
-            let proto_size = Rect::new(0, 0, size, size);
-            if let Ok(proto) = self.picker.new_protocol(dyn_img.clone(), proto_size, Resize::Fit(None)) {
-                let img_widget = Image::new(&proto);
-                f.render_widget(img_widget, draw_area);
+                            // protocol size matches draw_area cell dimensions
+                            let proto_size = Rect::new(0, 0, size, size);
+                            if let Ok(proto) = self.picker.new_protocol(dyn_img.clone(), proto_size, Resize::Fit(None)) {
+                                let img_widget = Image::new(&proto);
+                                f.render_widget(img_widget, draw_area);
+                            }
+                        }
+                    }
+                    col_index += 1;
+                }
+                _ => {}
             }
         }
 
         // Bottom pane: audio visualizer placeholder (20% height, full width)
-        f.render_widget(
-            Block::default().borders(Borders::ALL).title("Visualizer"),
-            bottom_area,
-        );
+        if let Some(bottom_area) = bottom_area_opt {
+            let title = if self.show_visualizer { "4: Visualizer" } else { "Visualizer" };
+            f.render_widget(
+                Block::default().borders(Borders::ALL).title(title),
+                bottom_area,
+            );
+        }
     }
 
 }
@@ -276,7 +366,7 @@ pub fn run() -> Result<()> {
 
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
-                app.on_key(key.code);
+                app.on_key(key);
             }
         }
 
