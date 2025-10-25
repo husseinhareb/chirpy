@@ -1,7 +1,6 @@
 // src/visualizer.rs
 
 use ratatui::{
-    backend::Backend,
     layout::Rect,
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -25,7 +24,7 @@ impl Visualizer {
     }
 
     /// Render a simple ASCII waveform-like visualization into `area`.
-    pub fn render<B: Backend>(&self, f: &mut Frame<B>, area: Rect) {
+    pub fn render(&self, f: &mut Frame<'_>, area: Rect) {
         // Leave room for borders
         let inner_w = area.width.saturating_sub(2) as usize;
         let inner_h = area.height.saturating_sub(2) as usize;

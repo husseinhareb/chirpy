@@ -17,13 +17,13 @@ enum PlayerCommand {
     Pause,
     Resume,
     Stop,
-    Exit,
 }
 
 /// One metadata entry: raw tag key & value.
 pub type TagEntry = (String, String);
 
 /// Collected metadata for the current track, including its real duration, lyrics, and artwork.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TrackMetadata {
     /// All tag‑frame key/value pairs from the primary tag.
@@ -69,9 +69,10 @@ impl MusicPlayer {
             // Try to create the output stream once
             let stream_res = OutputStream::try_default();
             if stream_res.is_err() {
-                // If we can't create audio output, just drain commands and continue
-                while let Ok(cmd) = rx.recv() {
-                    if let PlayerCommand::Exit = cmd { break; }
+                // If we can't create audio output, just drain commands until the
+                // sender is dropped, then return.
+                while let Ok(_cmd) = rx.recv() {
+                    // ignore commands
                 }
                 return;
             }
@@ -120,13 +121,14 @@ impl MusicPlayer {
                         ap.store(false, Ordering::SeqCst);
                         az.store(false, Ordering::SeqCst);
                     }
-                    PlayerCommand::Exit => {
-                        if let Some(s) = sink.take() {
-                            s.stop();
-                        }
-                        break;
-                    }
+                    // (Exit variant removed) when the command channel is closed the
+                    // `while let Ok(cmd) = rx.recv()` loop will exit; we'll stop the
+                    // sink after the loop.
                 }
+            }
+            // If the command channel closed, make sure to stop the sink.
+            if let Some(s) = sink.take() {
+                s.stop();
             }
             // Keep stream alive until thread exits
             drop(stream);
