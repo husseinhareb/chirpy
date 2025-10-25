@@ -32,6 +32,7 @@ use crate::{
     folder_content::{load_entries, tail_path},
     icons::icon_for_entry,
     music_player::{MusicPlayer, TrackMetadata},
+    visualizer::Visualizer,
 };
 
 pub struct App {
@@ -49,6 +50,8 @@ pub struct App {
     // metadata channel: background loader -> UI
     meta_tx: Sender<TrackMetadata>,
     meta_rx: Receiver<TrackMetadata>,
+    // visualizer
+    visualizer: Visualizer,
     // Section visibility toggles (1..4)
     show_files: bool,
     show_player: bool,
@@ -85,6 +88,7 @@ impl App {
             show_player: true,
             show_artwork: true,
             show_visualizer: true,
+            visualizer: Visualizer::new(),
         })
     }
     fn on_key(&mut self, key: KeyEvent) {
@@ -327,11 +331,9 @@ impl App {
 
         // Bottom pane: audio visualizer placeholder (20% height, full width)
         if let Some(bottom_area) = bottom_area_opt {
-            let title = if self.show_visualizer { "4: Visualizer" } else { "Visualizer" };
-            f.render_widget(
-                Block::default().borders(Borders::ALL).title(title),
-                bottom_area,
-            );
+            // Update and render the visualizer placeholder
+            self.visualizer.update(self.elapsed);
+            self.visualizer.render(f, bottom_area);
         }
     }
 
