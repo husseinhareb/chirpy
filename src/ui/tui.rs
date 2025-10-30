@@ -240,6 +240,8 @@ impl App {
         );
     }
 
+}
+
 pub fn run() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
