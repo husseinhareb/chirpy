@@ -1,6 +1,6 @@
 // src/music_player.rs
 
-use std::{fs::File, io::BufReader, path::PathBuf, sync::{mpsc::{self, Sender}, Arc}, thread};
+use std::{fs::File, io::BufReader, path::PathBuf, sync::{mpsc::{self, Sender}, Arc, Mutex}, thread};
 use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 
@@ -10,13 +10,68 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::ItemKey;
 
 // Rodio: decode, play, pause & resume audio
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, OutputStream, Sink, Source};
+
+// Ringbuf for circular buffer to store audio samples
+use ringbuf::{traits::*, HeapRb};
 
 enum PlayerCommand {
     Play(PathBuf),
     Pause,
     Resume,
     Stop,
+}
+
+/// A wrapper source that captures samples into a circular buffer while passing them through
+struct SampleCapture<S> {
+    source: S,
+    buffer: Arc<Mutex<HeapRb<f32>>>,
+}
+
+impl<S> SampleCapture<S> {
+    fn new(source: S, buffer: Arc<Mutex<HeapRb<f32>>>) -> Self {
+        Self { source, buffer }
+    }
+}
+
+impl<S> Iterator for SampleCapture<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(sample) = self.source.next() {
+            // Push sample to circular buffer (overwrites oldest if full)
+            if let Ok(mut buf) = self.buffer.lock() {
+                let _ = buf.try_push(sample);
+            }
+            Some(sample)
+        } else {
+            None
+        }
+    }
+}
+
+impl<S> Source for SampleCapture<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_frame_len(&self) -> Option<usize> {
+        self.source.current_frame_len()
+    }
+
+    fn channels(&self) -> u16 {
+        self.source.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.source.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        self.source.total_duration()
+    }
 }
 
 /// One metadata entry: raw tag key & value.
@@ -49,6 +104,8 @@ pub struct MusicPlayer {
     is_paused_flag: Arc<AtomicBool>,
     /// Most‑recent metadata (if any).
     pub metadata: Option<TrackMetadata>,
+    /// Shared circular buffer containing recent audio samples for visualization
+    pub sample_buffer: Arc<Mutex<HeapRb<f32>>>,
 }
 
 impl MusicPlayer {
@@ -59,10 +116,14 @@ impl MusicPlayer {
 
         let is_playing_flag = Arc::new(AtomicBool::new(false));
         let is_paused_flag = Arc::new(AtomicBool::new(false));
+        
+        // Create a circular buffer for audio samples (4096 samples ~= 93ms at 44.1kHz)
+        let sample_buffer = Arc::new(Mutex::new(HeapRb::<f32>::new(4096)));
 
         // Clone flags for audio thread
         let ap = is_playing_flag.clone();
         let az = is_paused_flag.clone();
+        let sample_buf_clone = sample_buffer.clone();
 
         // Spawn audio thread which owns the OutputStream and handles play/pause/stop
         thread::spawn(move || {
@@ -89,11 +150,20 @@ impl MusicPlayer {
                             s.stop();
                         }
 
+                        // Clear the sample buffer when starting a new track
+                        if let Ok(mut buf) = sample_buf_clone.lock() {
+                            buf.clear();
+                        }
+
                         // Try to create a new sink and queue the file. This happens off the UI thread.
                         if let Ok(new_sink) = Sink::try_new(&handle) {
                             if let Ok(file) = File::open(&path) {
                                 if let Ok(source) = Decoder::new(BufReader::new(file)) {
-                                    new_sink.append(source);
+                                    // Convert to f32 and wrap with sample capture
+                                    let converted = source.convert_samples::<f32>();
+                                    let capturing = SampleCapture::new(converted, sample_buf_clone.clone());
+                                    
+                                    new_sink.append(capturing);
                                     new_sink.play();
                                     ap.store(true, Ordering::SeqCst);
                                     az.store(false, Ordering::SeqCst);
@@ -134,7 +204,13 @@ impl MusicPlayer {
             drop(stream);
         });
 
-        Self { cmd_tx: tx, is_playing_flag, is_paused_flag, metadata: None }
+        Self { 
+            cmd_tx: tx, 
+            is_playing_flag, 
+            is_paused_flag, 
+            metadata: None,
+            sample_buffer,
+        }
     }
 
     /// Stop any existing playback, load metadata, and start playing `path`.

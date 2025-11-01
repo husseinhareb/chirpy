@@ -329,10 +329,9 @@ impl App {
             }
         }
 
-        // Bottom pane: audio visualizer placeholder (20% height, full width)
+        // Bottom pane: audio spectrum visualizer (20% height, full width)
         if let Some(bottom_area) = bottom_area_opt {
-            // Update and render the visualizer placeholder
-            self.visualizer.update(self.elapsed);
+            // Render the real-time spectrum visualizer
             self.visualizer.render(f, bottom_area);
         }
     }
@@ -382,6 +381,8 @@ pub fn run() -> Result<()> {
             if app.player.is_playing() && !app.player.is_paused() {
                 app.elapsed = (app.elapsed + 1).min(app.duration);
             }
+            // Update visualizer with current audio samples
+            app.visualizer.update(&app.player.sample_buffer);
         }
     }
 }
