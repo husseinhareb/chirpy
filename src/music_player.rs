@@ -44,6 +44,10 @@ where
         if let Some(sample) = self.source.next() {
             // Push sample to circular buffer (overwrites oldest if full)
             if let Ok(mut buf) = self.buffer.lock() {
+                // If buffer is full, pop the oldest sample to make room
+                if buf.is_full() {
+                    let _ = buf.try_pop();
+                }
                 let _ = buf.try_push(sample);
             }
             Some(sample)
@@ -117,8 +121,9 @@ impl MusicPlayer {
         let is_playing_flag = Arc::new(AtomicBool::new(false));
         let is_paused_flag = Arc::new(AtomicBool::new(false));
         
-        // Create a circular buffer for audio samples (4096 samples ~= 93ms at 44.1kHz)
-        let sample_buffer = Arc::new(Mutex::new(HeapRb::<f32>::new(4096)));
+        // Create a larger circular buffer for audio samples (16384 samples ~= 372ms at 44.1kHz)
+        // This gives us plenty of room for the visualizer without blocking playback
+        let sample_buffer = Arc::new(Mutex::new(HeapRb::<f32>::new(16384)));
 
         // Clone flags for audio thread
         let ap = is_playing_flag.clone();

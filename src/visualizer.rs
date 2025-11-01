@@ -43,7 +43,7 @@ impl Visualizer {
     /// Analyze audio samples and update frequency magnitudes
     pub fn update(&mut self, sample_buffer: &Arc<Mutex<HeapRb<f32>>>) {
         // Try to read samples from the buffer
-        let samples = if let Ok(mut buf) = sample_buffer.lock() {
+        let samples = if let Ok(buf) = sample_buffer.lock() {
             let available = buf.occupied_len();
             if available < 512 {
                 // Not enough samples for analysis
@@ -55,13 +55,16 @@ impl Visualizer {
                 return;
             }
             
-            // Read up to 2048 samples (good FFT size)
+            // Read up to 2048 samples (good FFT size) - copy without consuming
             let sample_count = available.min(2048);
             let mut samples = Vec::with_capacity(sample_count);
             
-            // Pop samples from the buffer (this consumes them)
+            // Create a consuming iterator to get the samples
+            let mut iter = buf.iter();
+            
+            // Take the most recent samples
             for _ in 0..sample_count {
-                if let Some(sample) = buf.try_pop() {
+                if let Some(&sample) = iter.next() {
                     samples.push(sample);
                 }
             }
@@ -164,43 +167,36 @@ impl Visualizer {
 
         // Calculate available space for bars
         let inner = block.inner(area);
-        let bar_width = (inner.width as usize).saturating_sub(1).max(1) / self.num_bands.max(1);
-        let visible_bands = (inner.width as usize).saturating_sub(1) / bar_width.max(1);
+        let bar_width = 3; // Fixed width for each bar
+        let bar_gap = 1; // Small gap between bars for distinction
+        let bar_spacing = bar_width + bar_gap;
+        let visible_bands = (inner.width as usize / bar_spacing as usize).min(self.num_bands);
         
         if visible_bands == 0 {
             f.render_widget(block, area);
             return;
         }
 
-        // Create bars for the visualizer
-        let bars: Vec<Bar> = (0..visible_bands.min(self.num_bands))
+        // Create bars for the visualizer with uniform white color
+        let bars: Vec<Bar> = (0..visible_bands)
             .map(|i| {
                 let magnitude = self.smoothed_magnitudes[i];
                 let height = (magnitude * 100.0) as u64;
                 
-                // Color gradient based on magnitude (green -> yellow -> red)
-                let color = if magnitude < 0.5 {
-                    Color::Green
-                } else if magnitude < 0.75 {
-                    Color::Yellow
-                } else {
-                    Color::Red
-                };
-                
                 Bar::default()
                     .value(height)
-                    .style(Style::default().fg(color))
+                    .style(Style::default().fg(Color::White))
             })
             .collect();
 
         // Create bar groups (one bar per group)
         let bar_group = BarGroup::default().bars(&bars);
         
-        // Create the bar chart
+        // Create the bar chart with no labels
         let chart = BarChart::default()
             .block(block)
-            .bar_width(bar_width.max(1) as u16)
-            .bar_gap(0)
+            .bar_width(bar_width)
+            .bar_gap(bar_gap)
             .data(bar_group);
 
         f.render_widget(chart, area);
