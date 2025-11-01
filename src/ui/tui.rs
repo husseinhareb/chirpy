@@ -348,8 +348,13 @@ pub fn run() -> Result<()> {
     terminal.clear()?;
 
     let mut app = App::new()?;
-    let tick_rate = Duration::from_secs(1);
-    let mut last_tick = Instant::now();
+    
+    // High refresh rate for smooth visualizer (120 Hz = ~8.3ms per frame)
+    let frame_rate = Duration::from_millis(8);
+    let mut last_frame = Instant::now();
+    
+    // Track elapsed seconds separately (update every second)
+    let mut last_second = Instant::now();
 
     loop {
         // Pull any ready metadata from background loader and apply it before drawing.
@@ -367,8 +372,11 @@ pub fn run() -> Result<()> {
                 .unwrap_or(1);
         }
 
+        // Update visualizer every frame for smooth animation
+        app.visualizer.update(&app.player.sample_buffer);
+        
         terminal.draw(|f| app.draw(f))?;
-        let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
+        let timeout = frame_rate.checked_sub(last_frame.elapsed()).unwrap_or_default();
 
         if event::poll(timeout)? {
             if let CEvent::Key(key) = event::read()? {
@@ -376,13 +384,16 @@ pub fn run() -> Result<()> {
             }
         }
 
-        if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
+        if last_frame.elapsed() >= frame_rate {
+            last_frame = Instant::now();
+        }
+        
+        // Update elapsed time counter every second
+        if last_second.elapsed() >= Duration::from_secs(1) {
+            last_second = Instant::now();
             if app.player.is_playing() && !app.player.is_paused() {
                 app.elapsed = (app.elapsed + 1).min(app.duration);
             }
-            // Update visualizer with current audio samples
-            app.visualizer.update(&app.player.sample_buffer);
         }
     }
 }
