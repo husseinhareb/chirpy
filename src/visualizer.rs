@@ -3,7 +3,7 @@
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 use rustfft::{FftPlanner, num_complex::Complex};
@@ -159,46 +159,106 @@ impl Visualizer {
             .collect()
     }
 
-    /// Render the frequency spectrum as a bar chart
+    /// Render the frequency spectrum as mirrored bars (CAVA-style)
     pub fn render(&self, f: &mut Frame<'_>, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title("4: Spectrum Visualizer (FFT)");
-
-        // Calculate available space for bars
-        let inner = block.inner(area);
-        let bar_width = 3; // Fixed width for each bar
-        let bar_gap = 1; // Small gap between bars for distinction
-        let bar_spacing = bar_width + bar_gap;
-        let visible_bands = (inner.width as usize / bar_spacing as usize).min(self.num_bands);
         
-        if visible_bands == 0 {
-            f.render_widget(block, area);
+        let inner = block.inner(area);
+        
+        // Render custom mirrored visualization
+        self.render_mirrored(f, inner);
+        
+        // Render the border
+        f.render_widget(block, area);
+    }
+    
+    /// Render mirrored bars like CAVA (symmetric around center)
+    fn render_mirrored(&self, f: &mut Frame<'_>, area: Rect) {
+        if area.height < 2 || area.width < 2 {
             return;
         }
-
-        // Create bars for the visualizer with uniform white color
-        let bars: Vec<Bar> = (0..visible_bands)
-            .map(|i| {
-                let magnitude = self.smoothed_magnitudes[i];
-                let height = (magnitude * 100.0) as u64;
-                
-                Bar::default()
-                    .value(height)
-                    .style(Style::default().fg(Color::White))
-            })
-            .collect();
-
-        // Create bar groups (one bar per group)
-        let bar_group = BarGroup::default().bars(&bars);
         
-        // Create the bar chart with no labels
-        let chart = BarChart::default()
-            .block(block)
-            .bar_width(bar_width)
-            .bar_gap(bar_gap)
-            .data(bar_group);
-
-        f.render_widget(chart, area);
+        let bar_width = 2;
+        let bar_gap = 1;
+        let bar_spacing = bar_width + bar_gap;
+        
+        // Calculate how many bars can fit in half the width
+        let half_width = area.width / 2;
+        let bars_per_side = (half_width as usize / bar_spacing).min(self.num_bands / 2);
+        
+        if bars_per_side == 0 {
+            return;
+        }
+        
+        let height = area.height as usize;
+        
+        // Build the visualization line by line from bottom to top
+        for row in 0..height {
+            let mut line = String::with_capacity(area.width as usize);
+            let threshold = 1.0 - (row as f32 / height as f32);
+            
+            // Left side (mirrored)
+            for i in (0..bars_per_side).rev() {
+                let magnitude = self.smoothed_magnitudes[i];
+                
+                // Add bar
+                for _ in 0..bar_width {
+                    if magnitude >= threshold {
+                        line.push('█');
+                    } else {
+                        line.push(' ');
+                    }
+                }
+                
+                // Add gap
+                for _ in 0..bar_gap {
+                    line.push(' ');
+                }
+            }
+            
+            // Center gap
+            line.push(' ');
+            
+            // Right side (same as left, mirrored)
+            for i in 0..bars_per_side {
+                // Add gap
+                for _ in 0..bar_gap {
+                    line.push(' ');
+                }
+                
+                let magnitude = self.smoothed_magnitudes[i];
+                
+                // Add bar
+                for _ in 0..bar_width {
+                    if magnitude >= threshold {
+                        line.push('█');
+                    } else {
+                        line.push(' ');
+                    }
+                }
+            }
+            
+            // Ensure the line fits within the available width
+            // Count characters, not bytes, and truncate safely
+            let mut char_count = line.chars().count();
+            
+            // Pad with spaces if too short
+            while char_count < area.width as usize {
+                line.push(' ');
+                char_count += 1;
+            }
+            
+            // Truncate safely if too long (respect UTF-8 boundaries)
+            if char_count > area.width as usize {
+                line = line.chars().take(area.width as usize).collect();
+            }
+            
+            let y = area.y + (height - row - 1) as u16;
+            let paragraph = Paragraph::new(line).style(Style::default().fg(Color::White));
+            let line_area = Rect::new(area.x, y, area.width, 1);
+            f.render_widget(paragraph, line_area);
+        }
     }
 }
