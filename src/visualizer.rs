@@ -34,9 +34,9 @@ impl Visualizer {
             fft_planner: FftPlanner::new(),
             num_bands,
             smoothed_magnitudes: vec![0.0; num_bands],
-            smoothing_factor: 0.7, // Smooth for visual appeal
+            smoothing_factor: 0.85, // Higher smoothing for more stable visualization
             peak_holds: vec![0.0; num_bands],
-            peak_decay: 0.95, // Peaks decay slowly
+            peak_decay: 0.92, // Peaks decay moderately
         }
     }
 
@@ -149,13 +149,20 @@ impl Visualizer {
             }
         }
         
-        // Normalize to 0.0-1.0 range
-        let max_mag = bands.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let min_mag = bands.iter().cloned().fold(f32::INFINITY, f32::min);
-        let range = (max_mag - min_mag).max(1.0);
+        // Convert from dB to linear scale with reduced sensitivity
+        // Expand the dB range to make it less sensitive
+        const MIN_DB: f32 = -80.0;
+        const MAX_DB: f32 = -10.0;  // Most music peaks around -10dB to -20dB, not 0dB
+        const DB_RANGE: f32 = MAX_DB - MIN_DB;
+        const SENSITIVITY: f32 = 0.5;  // Reduce overall sensitivity
         
         bands.iter()
-            .map(|&mag| ((mag - min_mag) / range).clamp(0.0, 1.0))
+            .map(|&db| {
+                // Map dB range to 0.0-1.0, with reduced sensitivity
+                let normalized = ((db - MIN_DB) / DB_RANGE).clamp(0.0, 1.0);
+                // Apply sensitivity reduction and curve
+                (normalized * SENSITIVITY).powf(0.7)
+            })
             .collect()
     }
 
@@ -194,10 +201,11 @@ impl Visualizer {
         
         let height = area.height as usize;
         
-        // Build the visualization line by line from bottom to top
+        // Build the visualization line by line from top to bottom
         for row in 0..height {
             let mut line = String::with_capacity(area.width as usize);
-            let threshold = 1.0 - (row as f32 / height as f32);
+            // Calculate threshold: top rows have high threshold, bottom rows have low
+            let threshold = (height - row) as f32 / height as f32;
             
             // Left side (mirrored)
             for i in (0..bars_per_side).rev() {
@@ -255,7 +263,7 @@ impl Visualizer {
                 line = line.chars().take(area.width as usize).collect();
             }
             
-            let y = area.y + (height - row - 1) as u16;
+            let y = area.y + row as u16;
             let paragraph = Paragraph::new(line).style(Style::default().fg(Color::White));
             let line_area = Rect::new(area.x, y, area.width, 1);
             f.render_widget(paragraph, line_area);

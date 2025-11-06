@@ -349,9 +349,13 @@ pub fn run() -> Result<()> {
 
     let mut app = App::new()?;
     
-    // High refresh rate for smooth visualizer (120 Hz = ~8.3ms per frame)
-    let frame_rate = Duration::from_millis(8);
+    // High refresh rate for smooth drawing (60 Hz = ~16ms per frame)
+    let frame_rate = Duration::from_millis(16);
     let mut last_frame = Instant::now();
+    
+    // Update visualizer less frequently (30 Hz = ~33ms)
+    let visualizer_update_rate = Duration::from_millis(33);
+    let mut last_visualizer_update = Instant::now();
     
     // Track elapsed seconds separately (update every second)
     let mut last_second = Instant::now();
@@ -372,8 +376,11 @@ pub fn run() -> Result<()> {
                 .unwrap_or(1);
         }
 
-        // Update visualizer every frame for smooth animation
-        app.visualizer.update(&app.player.sample_buffer);
+        // Update visualizer at a slower rate (30 Hz) for smoother, more responsive animation
+        if last_visualizer_update.elapsed() >= visualizer_update_rate {
+            app.visualizer.update(&app.player.sample_buffer);
+            last_visualizer_update = Instant::now();
+        }
         
         terminal.draw(|f| app.draw(f))?;
         let timeout = frame_rate.checked_sub(last_frame.elapsed()).unwrap_or_default();
