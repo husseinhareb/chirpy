@@ -34,9 +34,9 @@ impl Visualizer {
             fft_planner: FftPlanner::new(),
             num_bands,
             smoothed_magnitudes: vec![0.0; num_bands],
-            smoothing_factor: 0.85, // Higher smoothing for more stable visualization
+            smoothing_factor: 0.65, // Lower smoothing for responsive bars
             peak_holds: vec![0.0; num_bands],
-            peak_decay: 0.92, // Peaks decay moderately
+            peak_decay: 0.85, // Faster decay
         }
     }
 
@@ -149,19 +149,19 @@ impl Visualizer {
             }
         }
         
-        // Convert from dB to linear scale with reduced sensitivity
-        // Expand the dB range to make it less sensitive
-        const MIN_DB: f32 = -80.0;
-        const MAX_DB: f32 = -10.0;  // Most music peaks around -10dB to -20dB, not 0dB
+        // Convert from dB to linear scale for segment-based rendering
+        // Much wider dB range to prevent maxing out like CAVA
+        const MIN_DB: f32 = -60.0;
+        const MAX_DB: f32 = 0.0;  // Full range to 0dB
         const DB_RANGE: f32 = MAX_DB - MIN_DB;
-        const SENSITIVITY: f32 = 0.5;  // Reduce overall sensitivity
+        const SENSITIVITY: f32 = 0.35;  // Much lower sensitivity
         
         bands.iter()
             .map(|&db| {
-                // Map dB range to 0.0-1.0, with reduced sensitivity
+                // Map dB range to 0.0-1.0 for smooth segment filling
                 let normalized = ((db - MIN_DB) / DB_RANGE).clamp(0.0, 1.0);
-                // Apply sensitivity reduction and curve
-                (normalized * SENSITIVITY).powf(0.7)
+                // Apply stronger curve to keep bars at medium height like CAVA
+                (normalized * SENSITIVITY).powf(1.5)
             })
             .collect()
     }
@@ -201,23 +201,56 @@ impl Visualizer {
         
         let height = area.height as usize;
         
+        // Define 10 segments with different characters for smooth gradation
+        // Each segment represents 10% of the bar height
+        const SEGMENTS: usize = 10;
+        let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█', '█', '█'];
+        
+        // Build the entire visualization as a single multi-line string
+        let mut full_content = String::new();
+        
         // Build the visualization line by line from top to bottom
         for row in 0..height {
             let mut line = String::with_capacity(area.width as usize);
-            // Calculate threshold: top rows have high threshold, bottom rows have low
-            let threshold = (height - row) as f32 / height as f32;
             
             // Left side (mirrored)
             for i in (0..bars_per_side).rev() {
                 let magnitude = self.smoothed_magnitudes[i];
                 
+                // Calculate the filled height for this bar (0.0 to 1.0)
+                let filled_height = magnitude;
+                
+                // Convert to actual pixel height
+                let pixels_filled = (filled_height * height as f32) as usize;
+                
+                // Current row from bottom (0 = bottom, height-1 = top)
+                let row_from_bottom = height - row - 1;
+                
+                // Determine what character to show at this row
+                let char_to_show = if row_from_bottom < pixels_filled {
+                    // This row is filled
+                    let segment_idx = ((filled_height * SEGMENTS as f32) as usize).min(SEGMENTS - 1);
+                    
+                    // Check if we're at the top of the filled area for gradient effect
+                    if row_from_bottom == pixels_filled - 1 {
+                        // Top segment - use gradient character
+                        let fractional = (filled_height * height as f32) - pixels_filled as f32;
+                        if fractional > 0.5 {
+                            chars[segment_idx]
+                        } else {
+                            chars[segment_idx.saturating_sub(1)]
+                        }
+                    } else {
+                        // Fully filled segment
+                        '█'
+                    }
+                } else {
+                    ' '
+                };
+                
                 // Add bar
                 for _ in 0..bar_width {
-                    if magnitude >= threshold {
-                        line.push('█');
-                    } else {
-                        line.push(' ');
-                    }
+                    line.push(char_to_show);
                 }
                 
                 // Add gap
@@ -238,13 +271,40 @@ impl Visualizer {
                 
                 let magnitude = self.smoothed_magnitudes[i];
                 
+                // Calculate the filled height for this bar (0.0 to 1.0)
+                let filled_height = magnitude;
+                
+                // Convert to actual pixel height
+                let pixels_filled = (filled_height * height as f32) as usize;
+                
+                // Current row from bottom (0 = bottom, height-1 = top)
+                let row_from_bottom = height - row - 1;
+                
+                // Determine what character to show at this row
+                let char_to_show = if row_from_bottom < pixels_filled {
+                    // This row is filled
+                    let segment_idx = ((filled_height * SEGMENTS as f32) as usize).min(SEGMENTS - 1);
+                    
+                    // Check if we're at the top of the filled area for gradient effect
+                    if row_from_bottom == pixels_filled - 1 {
+                        // Top segment - use gradient character
+                        let fractional = (filled_height * height as f32) - pixels_filled as f32;
+                        if fractional > 0.5 {
+                            chars[segment_idx]
+                        } else {
+                            chars[segment_idx.saturating_sub(1)]
+                        }
+                    } else {
+                        // Fully filled segment
+                        '█'
+                    }
+                } else {
+                    ' '
+                };
+                
                 // Add bar
                 for _ in 0..bar_width {
-                    if magnitude >= threshold {
-                        line.push('█');
-                    } else {
-                        line.push(' ');
-                    }
+                    line.push(char_to_show);
                 }
             }
             
@@ -263,10 +323,15 @@ impl Visualizer {
                 line = line.chars().take(area.width as usize).collect();
             }
             
-            let y = area.y + row as u16;
-            let paragraph = Paragraph::new(line).style(Style::default().fg(Color::White));
-            let line_area = Rect::new(area.x, y, area.width, 1);
-            f.render_widget(paragraph, line_area);
+            // Add line to full content
+            full_content.push_str(&line);
+            if row < height - 1 {
+                full_content.push('\n');
+            }
         }
+        
+        // Render the entire visualization as a single widget to ensure proper clearing
+        let paragraph = Paragraph::new(full_content).style(Style::default().fg(Color::White));
+        f.render_widget(paragraph, area);
     }
 }
