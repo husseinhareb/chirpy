@@ -150,18 +150,18 @@ impl Visualizer {
         }
         
         // Convert from dB to linear scale for segment-based rendering
-        // Balanced dB range to match CAVA behavior
+        // Adjusted dB range to use full height while maintaining detail
         const MIN_DB: f32 = -65.0;
-        const MAX_DB: f32 = -8.0;  // Typical music peaks
+        const MAX_DB: f32 = -12.0;  // Adjusted to allow full height usage
         const DB_RANGE: f32 = MAX_DB - MIN_DB;
-        const SENSITIVITY: f32 = 0.55;  // Balanced sensitivity
+        const SENSITIVITY: f32 = 0.85;  // Higher sensitivity to fill height
         
         bands.iter()
             .map(|&db| {
                 // Map dB range to 0.0-1.0 for smooth segment filling
                 let normalized = ((db - MIN_DB) / DB_RANGE).clamp(0.0, 1.0);
-                // Balanced curve for natural CAVA-like response
-                (normalized * SENSITIVITY).powf(1.0)
+                // Gentle curve to allow bars to reach full height while maintaining gradation
+                (normalized * SENSITIVITY).powf(0.8)
             })
             .collect()
     }
