@@ -34,9 +34,9 @@ impl Visualizer {
             fft_planner: FftPlanner::new(),
             num_bands,
             smoothed_magnitudes: vec![0.0; num_bands],
-            smoothing_factor: 0.65, // Lower smoothing for responsive bars
+            smoothing_factor: 0.70, // Balanced smoothing
             peak_holds: vec![0.0; num_bands],
-            peak_decay: 0.85, // Faster decay
+            peak_decay: 0.87, // Balanced decay
         }
     }
 
@@ -150,18 +150,18 @@ impl Visualizer {
         }
         
         // Convert from dB to linear scale for segment-based rendering
-        // Much wider dB range to prevent maxing out like CAVA
-        const MIN_DB: f32 = -60.0;
-        const MAX_DB: f32 = 0.0;  // Full range to 0dB
+        // Balanced dB range to match CAVA behavior
+        const MIN_DB: f32 = -65.0;
+        const MAX_DB: f32 = -8.0;  // Typical music peaks
         const DB_RANGE: f32 = MAX_DB - MIN_DB;
-        const SENSITIVITY: f32 = 0.35;  // Much lower sensitivity
+        const SENSITIVITY: f32 = 0.55;  // Balanced sensitivity
         
         bands.iter()
             .map(|&db| {
                 // Map dB range to 0.0-1.0 for smooth segment filling
                 let normalized = ((db - MIN_DB) / DB_RANGE).clamp(0.0, 1.0);
-                // Apply stronger curve to keep bars at medium height like CAVA
-                (normalized * SENSITIVITY).powf(1.5)
+                // Balanced curve for natural CAVA-like response
+                (normalized * SENSITIVITY).powf(1.0)
             })
             .collect()
     }
