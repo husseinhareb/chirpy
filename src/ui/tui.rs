@@ -22,12 +22,11 @@ use ratatui::{
 };
 
 use ratatui_image::{
-    Image,
     picker::{Picker, ProtocolType},
-    Resize,
 };
 
 use crate::{
+    ascii_art,
     file_metadata::FileCategory,
     folder_content::{load_entries, tail_path},
     icons::icon_for_entry,
@@ -300,26 +299,25 @@ impl App {
                 }
                 "artwork" => {
                     if col_index < cols.len() {
-                        let title = "3: Artwork";
+                        let title = "3: Artwork (ASCII)";
                         let art_area = cols[col_index];
-                        f.render_widget(Block::default().borders(Borders::ALL).title(title), art_area);
+                        let block = Block::default().borders(Borders::ALL).title(title);
+                        let inner = block.inner(art_area);
+                        f.render_widget(block, art_area);
 
                         if let Some(dyn_img) = &self.artwork {
-                            // inner dimensions (leave 1-cell margin inside border)
-                            let inner_w = art_area.width.saturating_sub(2);
-                            let inner_h = art_area.height.saturating_sub(2);
-                            // square size no larger than inner_w and inner_h
-                            let size = inner_w.min(inner_h);
-                            // center in inner rect
-                            let offset_x = art_area.x + 1 + ((inner_w - size) / 2);
-                            let offset_y = art_area.y + 1 + ((inner_h - size) / 2);
-                            let draw_area = Rect::new(offset_x, offset_y, size, size);
-
-                            // protocol size matches draw_area cell dimensions
-                            let proto_size = Rect::new(0, 0, size, size);
-                            if let Ok(proto) = self.picker.new_protocol(dyn_img.clone(), proto_size, Resize::Fit(None)) {
-                                let img_widget = Image::new(&proto);
-                                f.render_widget(img_widget, draw_area);
+                            // Use inner area for ASCII art (no extra margins needed)
+                            let width = inner.width as usize;
+                            let height = inner.height as usize;
+                            
+                            if width > 0 && height > 0 {
+                                // Convert image to ASCII art
+                                let ascii_art = ascii_art::image_to_colored_ascii(dyn_img, width, height);
+                                
+                                // Render ASCII art as a paragraph
+                                let paragraph = Paragraph::new(ascii_art)
+                                    .wrap(Wrap { trim: false });
+                                f.render_widget(paragraph, inner);
                             }
                         }
                     }

@@ -5,6 +5,7 @@ mod folder_content;
 mod visualizer;
 mod ui;
 mod music_player;
+mod ascii_art;
 fn main() -> anyhow::Result<()> {
     ui::tui::run()
 }
