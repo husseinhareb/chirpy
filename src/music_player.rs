@@ -122,7 +122,6 @@ impl MusicPlayer {
         let is_paused_flag = Arc::new(AtomicBool::new(false));
         
         // Create a larger circular buffer for audio samples (16384 samples ~= 372ms at 44.1kHz)
-        // This gives us plenty of room for the visualizer without blocking playback
         let sample_buffer = Arc::new(Mutex::new(HeapRb::<f32>::new(16384)));
 
         // Clone flags for audio thread

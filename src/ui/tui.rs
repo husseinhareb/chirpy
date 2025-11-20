@@ -26,7 +26,6 @@ use ratatui_image::{
 };
 
 use crate::{
-    ascii_art,
     file_metadata::FileCategory,
     folder_content::{load_entries, tail_path},
     icons::icon_for_entry,
@@ -64,7 +63,8 @@ impl App {
         let mut state = ListState::default();
         state.select(Some(0));
 
-        let mut picker = Picker::from_query_stdio()?;
+        // Create picker with fallback if stdio query fails
+        let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 12)));
         picker.set_protocol_type(ProtocolType::Kitty);
 
         let (meta_tx, meta_rx) = std::sync::mpsc::channel::<TrackMetadata>();
@@ -299,27 +299,11 @@ impl App {
                 }
                 "artwork" => {
                     if col_index < cols.len() {
-                        let title = "3: Artwork (ASCII)";
-                        let art_area = cols[col_index];
-                        let block = Block::default().borders(Borders::ALL).title(title);
-                        let inner = block.inner(art_area);
-                        f.render_widget(block, art_area);
-
-                        if let Some(dyn_img) = &self.artwork {
-                            // Use inner area for ASCII art (no extra margins needed)
-                            let width = inner.width as usize;
-                            let height = inner.height as usize;
-                            
-                            if width > 0 && height > 0 {
-                                // Convert image to ASCII art
-                                let ascii_art = ascii_art::image_to_colored_ascii(dyn_img, width, height);
-                                
-                                // Render ASCII art as a paragraph
-                                let paragraph = Paragraph::new(ascii_art)
-                                    .wrap(Wrap { trim: false });
-                                f.render_widget(paragraph, inner);
-                            }
-                        }
+                        let title = "3: Artwork";
+                        f.render_widget(
+                            Block::default().borders(Borders::ALL).title(title),
+                            cols[col_index],
+                        );
                     }
                     col_index += 1;
                 }
@@ -361,10 +345,6 @@ pub fn run() -> Result<()> {
     loop {
         // Pull any ready metadata from background loader and apply it before drawing.
         if let Ok(meta) = app.meta_rx.try_recv() {
-            // Only update metadata and duration here. Do NOT eagerly load artwork into
-            // `app.artwork` because creating terminal image protocols on every draw
-            // can flood the terminal and make it unresponsive. Artwork can be loaded
-            // on demand (e.g., with a dedicated key) in the future.
             app.player.metadata = Some(meta);
             app.duration = app
                 .player
