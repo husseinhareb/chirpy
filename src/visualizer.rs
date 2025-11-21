@@ -227,14 +227,17 @@ impl Visualizer {
                 // Calculate the filled height for this bar (0.0 to 1.0)
                 let filled_height = magnitude;
                 
-                // Convert to actual pixel height
+                // Convert to actual pixel height (minimum 1 to always show at least ▁)
                 let pixels_filled = (filled_height * height as f32) as usize;
                 
                 // Current row from bottom (0 = bottom, height-1 = top)
                 let row_from_bottom = height - row - 1;
                 
                 // Determine what character to show at this row
-                let char_to_show = if row_from_bottom < pixels_filled {
+                let char_to_show = if pixels_filled == 0 && row_from_bottom == 0 {
+                    // Always show minimum bar at bottom row
+                    '▁'
+                } else if row_from_bottom < pixels_filled {
                     // This row is filled
                     let segment_idx = ((filled_height * SEGMENTS as f32) as usize).min(SEGMENTS - 1);
                     
@@ -281,14 +284,17 @@ impl Visualizer {
                 // Calculate the filled height for this bar (0.0 to 1.0)
                 let filled_height = magnitude;
                 
-                // Convert to actual pixel height
+                // Convert to actual pixel height (minimum 1 to always show at least ▁)
                 let pixels_filled = (filled_height * height as f32) as usize;
                 
                 // Current row from bottom (0 = bottom, height-1 = top)
                 let row_from_bottom = height - row - 1;
                 
                 // Determine what character to show at this row
-                let char_to_show = if row_from_bottom < pixels_filled {
+                let char_to_show = if pixels_filled == 0 && row_from_bottom == 0 {
+                    // Always show minimum bar at bottom row
+                    '▁'
+                } else if row_from_bottom < pixels_filled {
                     // This row is filled
                     let segment_idx = ((filled_height * SEGMENTS as f32) as usize).min(SEGMENTS - 1);
                     
