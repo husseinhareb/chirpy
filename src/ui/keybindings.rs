@@ -26,15 +26,6 @@ pub fn is_shifted_symbol(key: &KeyEvent) -> bool {
     )
 }
 
-/// Check if this is a section toggle key press (Shift+number).
-pub fn is_section_toggle(key: &KeyEvent) -> bool {
-    if let Some(_) = map_key_to_digit(key) {
-        key.modifiers.contains(KeyModifiers::SHIFT) || is_shifted_symbol(key)
-    } else {
-        false
-    }
-}
-
 /// Navigation actions derived from key events.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NavigationAction {

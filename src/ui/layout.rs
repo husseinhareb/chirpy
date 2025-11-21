@@ -39,6 +39,7 @@ impl SectionVisibility {
 /// Computed layout areas for rendering.
 pub struct ComputedLayout {
     /// Main area (upper portion)
+    #[allow(dead_code)]
     pub main_area: Rect,
     /// Bottom visualizer area (if visible)
     pub visualizer_area: Option<Rect>,

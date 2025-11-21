@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::Result;
 use image::DynamicImage;
-use ratatui::{layout::Rect, widgets::ListState, Frame};
+use ratatui::{widgets::ListState, Frame};
 use ratatui_image::picker::{Picker, ProtocolType};
 
 use crate::{

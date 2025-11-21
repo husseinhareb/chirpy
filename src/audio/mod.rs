@@ -7,7 +7,6 @@ pub mod sample_capture;
 pub mod visualizer;
 
 // Re-export commonly used types
-pub use metadata::{TagEntry, TrackMetadata};
+pub use metadata::TrackMetadata;
 pub use player::MusicPlayer;
-pub use sample_capture::SampleCapture;
 pub use visualizer::Visualizer;
