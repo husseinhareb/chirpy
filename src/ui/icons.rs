@@ -1,7 +1,9 @@
-// src/icons.rs
+// src/ui/icons.rs
+//! Icon mappings for file types in the browser.
 
-use crate::file_metadata::FileCategory;
+use crate::fs::FileCategory;
 
+/// Get the appropriate icon for a file or directory entry.
 pub fn icon_for_entry(is_dir: bool, category: &FileCategory) -> &'static str {
     if is_dir {
         "\u{f07b}" // folder icon

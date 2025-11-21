@@ -1,16 +1,14 @@
-// src/file_metadata.rs
+// src/fs/detection.rs
+//! File type detection using magic numbers and extension-based fallback.
 
-use std::{ fmt, path::Path };
+use std::{fmt, path::Path};
+
 use anyhow::Result;
-
-// infer for magic‐number detection
-use infer::{ Infer, MatcherType };
-
-// extension‐based fallback
+use infer::{Infer, MatcherType};
 use mime_guess::MimeGuess;
 
-/// High-level file categories
-#[derive(Debug, PartialEq)]
+/// High-level file categories.
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum FileCategory {
     Image,
     Audio,
@@ -32,14 +30,14 @@ impl fmt::Display for FileCategory {
     }
 }
 
-/// Holds a detected MIME type + category
+/// Holds a detected MIME type + category.
 #[derive(Debug)]
 pub struct FileType {
     pub mime: String,
     pub category: FileCategory,
 }
 
-/// Detect MIME type & category for a given file path
+/// Detect MIME type & category for a given file path.
 pub fn detect_file_type(path: &Path) -> Result<FileType> {
     // 1. Try magic-number sniffing
     if let Some(kind) = Infer::new().get_from_path(path)? {

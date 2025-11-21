@@ -1,34 +1,36 @@
-// src/folder_content.rs
+// src/fs/browser.rs
+//! Directory browsing and file listing functionality.
 
-use std::{ fs, path::{ PathBuf, Component, Path } };
-use crate::file_metadata::{ detect_file_type, FileCategory };
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
 
-/// Returns the last `n` components of `path` joined by `/`. If the path has
-/// fewer than `n` components, returns the full path.
+use super::detection::{detect_file_type, FileCategory};
+
+/// Returns the last `n` components of `path` joined by `/`.
+/// If the path has fewer than `n` components, returns the full path.
 pub fn tail_path(path: &Path, n: usize) -> String {
     let comps: Vec<String> = path
         .components()
-        .filter_map(|c| {
-            match c {
-                Component::RootDir => Some("/".to_string()),
-                Component::Normal(os) => Some(os.to_string_lossy().into_owned()),
-                _ => None,
-            }
+        .filter_map(|c| match c {
+            Component::RootDir => Some("/".to_string()),
+            Component::Normal(os) => Some(os.to_string_lossy().into_owned()),
+            _ => None,
         })
         .collect();
 
-    let (prefix, body) = if
-        comps
-            .first()
-            .map(|s| s == "/")
-            .unwrap_or(false)
-    {
+    let (prefix, body) = if comps.first().map(|s| s == "/").unwrap_or(false) {
         (Some("/"), &comps[1..])
     } else {
         (None, &comps[..])
     };
 
-    let slice = if body.len() <= n { body } else { &body[body.len().saturating_sub(n)..] };
+    let slice = if body.len() <= n {
+        body
+    } else {
+        &body[body.len().saturating_sub(n)..]
+    };
 
     match prefix {
         Some(_) => format!("/{}", slice.join("/")),
@@ -36,11 +38,10 @@ pub fn tail_path(path: &Path, n: usize) -> String {
     }
 }
 
-/// Load **only** directories and audio files from `dir`, returning a Vec of
-/// (name, is_dir, category, mime)
+/// Load **only** directories and audio files from `dir`.
+/// Returns a Vec of (name, is_dir, category, mime).
 pub fn load_entries(dir: &PathBuf) -> Vec<(String, bool, FileCategory, String)> {
-    let mut list = fs
-        ::read_dir(dir)
+    let mut list = fs::read_dir(dir)
         .unwrap() // you might replace this with `?` and a Result in real code
         .filter_map(Result::ok)
         .filter_map(|e| {

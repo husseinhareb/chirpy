@@ -1,11 +1,12 @@
 //src/main.rs
-mod file_metadata;
-mod icons;
-mod folder_content;
-mod visualizer;
+//! Chirpy - A terminal-based music player.
+
+mod app;
+mod audio;
+mod config;
+mod fs;
 mod ui;
-mod music_player;
 
 fn main() -> anyhow::Result<()> {
-    ui::tui::run()
+    ui::run()
 }
