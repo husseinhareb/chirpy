@@ -24,6 +24,10 @@ pub struct Visualizer {
     peak_holds: Vec<f32>,
     /// Peak hold decay rate
     peak_decay: f32,
+    /// Auto-sensitivity: current minimum dB threshold (rolling)
+    min_db: f32,
+    /// Auto-sensitivity: current maximum dB threshold (rolling)
+    max_db: f32,
 }
 
 impl Visualizer {
@@ -37,6 +41,8 @@ impl Visualizer {
             smoothing_factor: 0.70, // Balanced smoothing
             peak_holds: vec![0.0; num_bands],
             peak_decay: 0.87, // Balanced decay
+            min_db: -80.0,
+            max_db: -10.0,
         }
     }
 
@@ -57,17 +63,10 @@ impl Visualizer {
             
             // Read up to 2048 samples (good FFT size) - copy without consuming
             let sample_count = available.min(2048);
-            let mut samples = Vec::with_capacity(sample_count);
             
-            // Create a consuming iterator to get the samples
-            let mut iter = buf.iter();
-            
-            // Take the most recent samples
-            for _ in 0..sample_count {
-                if let Some(&sample) = iter.next() {
-                    samples.push(sample);
-                }
-            }
+            // Skip older samples to get the most recent ones (reduces lag)
+            let start = available.saturating_sub(sample_count);
+            let samples: Vec<f32> = buf.iter().skip(start).take(sample_count).copied().collect();
             samples
         } else {
             return;
@@ -116,11 +115,13 @@ impl Visualizer {
         
         // Compute magnitude spectrum (only first half due to symmetry)
         let spectrum_size = fft_size / 2;
+        // Normalize by FFT size to get proper dBFS values in ~[-80, 0] range
+        let scale = 1.0 / fft_size as f32;
         let magnitudes: Vec<f32> = buffer.iter()
             .take(spectrum_size)
             .map(|c| {
-                let mag = (c.re * c.re + c.im * c.im).sqrt();
-                // Convert to dB scale for better visualization
+                let mag = (c.re * c.re + c.im * c.im).sqrt() * scale;
+                // Convert to dB scale (now properly normalized to dBFS)
                 20.0 * mag.max(1e-10).log10()
             })
             .collect();
@@ -130,11 +131,11 @@ impl Visualizer {
     }
 
     /// Group FFT bins into logarithmic frequency bands
-    fn group_into_bands(&self, magnitudes: &[f32], spectrum_size: usize) -> Vec<f32> {
-        let mut bands = vec![0.0; self.num_bands];
+    fn group_into_bands(&mut self, magnitudes: &[f32], spectrum_size: usize) -> Vec<f32> {
+        let mut bands_db = vec![0.0f32; self.num_bands];
         
         // Use logarithmic spacing for frequency bands (more natural perception)
-        for (i, band) in bands.iter_mut().enumerate() {
+        for (i, band) in bands_db.iter_mut().enumerate() {
             let freq_start = (i as f32 / self.num_bands as f32).powf(2.5);
             let freq_end = ((i + 1) as f32 / self.num_bands as f32).powf(2.5);
             
@@ -145,23 +146,29 @@ impl Visualizer {
                 // Average magnitude in this band
                 let sum: f32 = magnitudes[bin_start..bin_end].iter().sum();
                 let count = (bin_end - bin_start) as f32;
-                *band = if count > 0.0 { sum / count } else { 0.0 };
+                *band = if count > 0.0 { sum / count } else { -80.0 };
+            } else {
+                *band = -80.0;
             }
         }
         
-        // Convert from dB to linear scale for segment-based rendering
-        // Adjusted dB range to use full height while maintaining detail
-        const MIN_DB: f32 = -65.0;
-        const MAX_DB: f32 = -12.0;  // Adjusted to allow full height usage
-        const DB_RANGE: f32 = MAX_DB - MIN_DB;
-        const SENSITIVITY: f32 = 0.85;  // Higher sensitivity to fill height
+        // Auto-sensitivity: track rolling max and adjust dB window like CAVA
+        let frame_max = bands_db.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         
-        bands.iter()
+        // Move max_db slowly toward the observed max (like CAVA's autosens)
+        let target_max = frame_max.max(-30.0); // don't go too low
+        self.max_db = 0.9 * self.max_db + 0.1 * target_max;
+        self.min_db = self.max_db - 60.0; // fixed 60 dB window
+        
+        let db_range = self.max_db - self.min_db;
+        
+        // Convert from dB to linear scale for segment-based rendering
+        bands_db.iter()
             .map(|&db| {
                 // Map dB range to 0.0-1.0 for smooth segment filling
-                let normalized = ((db - MIN_DB) / DB_RANGE).clamp(0.0, 1.0);
-                // Gentle curve to allow bars to reach full height while maintaining gradation
-                (normalized * SENSITIVITY).powf(0.8)
+                let normalized = ((db - self.min_db) / db_range).clamp(0.0, 1.0);
+                // Use exponent > 1 to emphasize differences at the bottom (not top)
+                normalized.powf(1.2)
             })
             .collect()
     }
