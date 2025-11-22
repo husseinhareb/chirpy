@@ -94,18 +94,17 @@ impl SpectrumRenderer {
                     line.push(char_to_show);
                 }
 
-                // Add gap
-                for _ in 0..self.bar_gap {
-                    line.push(' ');
+                // Add gap (but not after the last bar on left side)
+                if i > 0 {
+                    for _ in 0..self.bar_gap {
+                        line.push(' ');
+                    }
                 }
             }
 
-            // Center gap
-            line.push(' ');
-
             // Right side (same as left, mirrored)
             for i in 0..bars_per_side {
-                // Add gap
+                // Add gap before each bar
                 for _ in 0..self.bar_gap {
                     line.push(' ');
                 }
