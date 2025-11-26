@@ -41,6 +41,8 @@ pub struct App {
     pub elapsed: u64,
     /// Total track duration in seconds
     pub duration: u64,
+    /// Index of currently playing track in entries (if any)
+    pub current_track_index: Option<usize>,
 
     /// Image picker for artwork rendering
     #[allow(dead_code)]
@@ -84,6 +86,7 @@ impl App {
             player: MusicPlayer::new(),
             elapsed: 0,
             duration: 1,
+            current_track_index: None,
 
             picker,
             artwork: None,
@@ -128,6 +131,7 @@ impl App {
                             self.elapsed = 0;
                             self.duration = 1;
                             self.artwork = None;
+                            self.current_track_index = Some(self.selected);
 
                             // Spawn a background thread to load metadata
                             let tx = self.meta_tx.clone();
@@ -147,6 +151,17 @@ impl App {
                 } else {
                     self.player.pause();
                 }
+            }
+            NavigationAction::Stop => {
+                self.player.stop();
+                self.elapsed = 0;
+                self.current_track_index = None;
+            }
+            NavigationAction::NextTrack => {
+                self.play_adjacent_track(1);
+            }
+            NavigationAction::PreviousTrack => {
+                self.play_adjacent_track(-1);
             }
             NavigationAction::Back => {
                 if self.current_dir.pop() {
@@ -196,6 +211,8 @@ impl App {
                             self.player.metadata.as_ref(),
                             self.elapsed,
                             self.duration,
+                            self.player.is_playing(),
+                            self.player.is_paused(),
                         );
                     }
                     col_index += 1;
@@ -238,6 +255,68 @@ impl App {
     pub fn tick_elapsed(&mut self) {
         if self.player.is_playing() && !self.player.is_paused() {
             self.elapsed = (self.elapsed + 1).min(self.duration);
+        }
+    }
+
+    /// Play the next or previous audio track relative to current position.
+    /// `direction`: 1 for next, -1 for previous.
+    fn play_adjacent_track(&mut self, direction: i32) {
+        // Get audio file indices
+        let audio_indices: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, is_dir, cat, _))| !is_dir && *cat == FileCategory::Audio)
+            .map(|(i, _)| i)
+            .collect();
+
+        if audio_indices.is_empty() {
+            return;
+        }
+
+        // Find current position in audio files
+        let current_audio_pos = self
+            .current_track_index
+            .and_then(|idx| audio_indices.iter().position(|&i| i == idx));
+
+        let next_audio_pos = match current_audio_pos {
+            Some(pos) => {
+                let new_pos = pos as i32 + direction;
+                if new_pos < 0 {
+                    audio_indices.len() - 1 // Wrap to last
+                } else if new_pos >= audio_indices.len() as i32 {
+                    0 // Wrap to first
+                } else {
+                    new_pos as usize
+                }
+            }
+            None => {
+                // No track playing, start from first or last based on direction
+                if direction > 0 { 0 } else { audio_indices.len() - 1 }
+            }
+        };
+
+        let entry_idx = audio_indices[next_audio_pos];
+        let (name, _, _, _) = &self.entries[entry_idx];
+        let path = self.current_dir.join(name);
+
+        if self.player.play(&path).is_ok() {
+            self.player.metadata = None;
+            self.elapsed = 0;
+            self.duration = 1;
+            self.artwork = None;
+            self.current_track_index = Some(entry_idx);
+            self.selected = entry_idx;
+            self.state.select(Some(entry_idx));
+
+            // Spawn background metadata loader
+            let tx = self.meta_tx.clone();
+            let path_clone = path.clone();
+            thread::spawn(move || {
+                if let Ok(meta) = MusicPlayer::load_metadata(path_clone) {
+                    let _ = tx.send(meta);
+                }
+            });
         }
     }
 }
